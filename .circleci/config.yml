@@ -1,0 +1,329 @@
+# Configuration file for https://circleci.com/gh/angular/angular-cli
+
+# Note: YAML anchors allow an object to be re-used, reducing duplication.
+# The ampersand declares an alias for an object, then later the `<<: *name`
+# syntax dereferences it.
+# See http://blog.daemonl.com/2016/02/yaml.html
+# To validate changes, use an online parser, eg.
+# http://yaml-online-parser.appspot.com/
+
+# Variables
+
+## IMPORTANT
+# If you change the cache key prefix, also sync the restore_cache fallback to match.
+# Keep the static part of the cache key as prefix to enable correct fallbacks.
+# See https://circleci.com/docs/2.0/caching/#restoring-cache for how prefixes work in CircleCI.
+var_1: &default_docker_image circleci/node:12.1
+var_2: &browsers_docker_image circleci/node:12.1-browsers
+var_3: &browsers_docker_image_node_10 circleci/node:10.12-browsers
+var_4: &cache_key angular_devkit-0.11.0-{{ checksum "yarn.lock" }}
+
+# Settings common to each job
+anchor_1: &defaults
+  working_directory: ~/ng
+  docker:
+    - image: *default_docker_image
+anchor_1_win: &defaults_win
+  working_directory: ~/ng
+  resource_class: windows.medium
+  shell: powershell.exe -ExecutionPolicy Bypass
+  machine:
+    image: windows-server-2019
+
+# After checkout, rebase on top of target branch.
+anchor_2: &post_checkout
+  run:
+    name: Rebase PR on target branch
+    command: >
+      if [[ -n "${CIRCLE_PR_NUMBER}" ]]; then
+        # User is required for rebase.
+        git config user.name "angular-ci"
+        git config user.email "angular-ci"
+        # Rebase PR on top of target branch.
+        node tools/rebase-pr.js angular/angular-cli ${CIRCLE_PR_NUMBER}
+      else
+        echo "This build is not over a PR, nothing to do."
+      fi
+anchor_2_win: &post_checkout_win
+  run:
+    name: Rebase PR on target branch
+    command: >
+      if (Test-Path env:CIRCLE_PR_NUMBER) {
+        git config user.name "angular-ci"
+        git config user.email "angular-ci"
+        node tools\rebase-pr.js angular/angular-cli $env:CIRCLE_PR_NUMBER }
+anchor_3: &restore_cache
+  restore_cache:
+    keys:
+      - *cache_key
+      # This fallback should be the cache_key without variables.
+      - angular_devkit-0.11.0-
+anchor_4: &attach_options
+  at: .
+anchor_5: &env_win
+  run:
+    # Need to install node and yarn before, as the base windows image doesn't have anything.
+    # TODO: remove when CircleCI provides preconfigured node images/VMs.
+    name: Setup windows node environment
+    command: ./.circleci/windows-env.ps1
+anchor_6: &ignore_pull_requests
+  filters:
+    branches:
+      ignore:
+        - /pull\/.*/
+
+# Job definitions
+version: 2.1
+jobs:
+  install:
+    <<: *defaults
+    steps:
+      - checkout
+      - *post_checkout
+      - *restore_cache
+      - run: yarn install --frozen-lockfile
+      - persist_to_workspace:
+          root: .
+          paths:
+            - ./*
+      - save_cache:
+          key: *cache_key
+          paths:
+            - ~/.cache/yarn
+
+  lint:
+    <<: *defaults
+    steps:
+      - attach_workspace: *attach_options
+      - run: yarn lint
+      - run: 'yarn bazel:format -mode=check ||
+              (echo "BUILD files not formatted. Please run ''yarn bazel:format''" ; exit 1)'
+      # Run the skylark linter to check our Bazel rules
+      - run: 'yarn bazel:lint ||
+              (echo -e "\n.bzl files have lint errors. Please run ''yarn bazel:lint-fix''"; exit 1)'
+
+  validate:
+    <<: *defaults
+    steps:
+      - attach_workspace: *attach_options
+      - run: yarn validate -- --ci
+
+  test:
+    <<: *defaults
+    steps:
+      - attach_workspace: *attach_options
+      - run: yarn test -- --full
+
+  test-large:
+    <<: *defaults
+    docker:
+      - image: *browsers_docker_image
+    resource_class: large
+    parallelism: 4
+    steps:
+      - attach_workspace: *attach_options
+      - run: yarn webdriver-update
+      - run: yarn test-large -- --full --nb-shards=${CIRCLE_NODE_TOTAL} --shard=${CIRCLE_NODE_INDEX}
+
+  e2e-cli:
+    <<: *defaults
+    docker:
+      - image: *browsers_docker_image
+    environment:
+      BASH_ENV: ~/.profile
+      NPM_CONFIG_PREFIX: ~/.npm-global
+    resource_class: xlarge
+    parallelism: 4
+    steps:
+      - attach_workspace: *attach_options
+      - run: PATH=~/.npm-global/bin:$PATH xvfb-run -a node ./tests/legacy-cli/run_e2e --nb-shards=${CIRCLE_NODE_TOTAL} --shard=${CIRCLE_NODE_INDEX}
+      - store_artifacts:
+          path: /tmp/dist
+          destination: cli/new-production
+
+  e2e-cli-node-10:
+    <<: *defaults
+    docker:
+      - image: *browsers_docker_image_node_10
+    environment:
+      BASH_ENV: ~/.profile
+      NPM_CONFIG_PREFIX: ~/.npm-global
+    resource_class: xlarge
+    parallelism: 4
+    steps:
+      - attach_workspace: *attach_options
+      - run: PATH=~/.npm-global/bin:$PATH xvfb-run -a node ./tests/legacy-cli/run_e2e --nb-shards=${CIRCLE_NODE_TOTAL} --shard=${CIRCLE_NODE_INDEX}
+
+  e2e-cli-ivy:
+    <<: *defaults
+    docker:
+      - image: *browsers_docker_image
+    environment:
+      BASH_ENV: ~/.profile
+      NPM_CONFIG_PREFIX: ~/.npm-global
+    resource_class: xlarge
+    parallelism: 4
+    steps:
+      - attach_workspace: *attach_options
+      - run: PATH=~/.npm-global/bin:$PATH xvfb-run -a node ./tests/legacy-cli/run_e2e --nb-shards=${CIRCLE_NODE_TOTAL} --shard=${CIRCLE_NODE_INDEX} --ivy
+
+  e2e-cli-ng-snapshots:
+    <<: *defaults
+    docker:
+      - image: *browsers_docker_image
+    environment:
+      BASH_ENV: ~/.profile
+      NPM_CONFIG_PREFIX: ~/.npm-global
+    resource_class: xlarge
+    parallelism: 4
+    steps:
+      - attach_workspace: *attach_options
+      - run: PATH=~/.npm-global/bin:$PATH xvfb-run -a node ./tests/legacy-cli/run_e2e --nb-shards=${CIRCLE_NODE_TOTAL} --shard=${CIRCLE_NODE_INDEX} --ng-snapshots
+
+  build:
+    <<: *defaults
+    steps:
+      - attach_workspace: *attach_options
+      - run: yarn admin -- build
+
+  build-bazel:
+    <<: *defaults
+    resource_class: xlarge
+    steps:
+      - attach_workspace: *attach_options
+      - run: sudo cp .circleci/bazel.rc /etc/bazel.bazelrc
+      - run: yarn bazel:test
+
+  snapshot_publish:
+    <<: *defaults
+    steps:
+      - attach_workspace: *attach_options
+      - run:
+          name: Decrypt Credentials
+          # Note: when changing the image, you might have to re-encrypt the credentials with a 
+          # matching version of openssl.
+          # See https://stackoverflow.com/a/43847627/2116927 for more info.
+          command: |
+            openssl aes-256-cbc -d -in .circleci/github_token -k "${KEY}" -out ~/github_token -md md5
+      - run:
+          name: Deployment to Snapshot
+          command: |
+            yarn admin -- snapshots --verbose --githubTokenFile=${HOME}/github_token
+
+  publish:
+    <<: *defaults
+    steps:
+      - attach_workspace: *attach_options
+      - run:
+          name: Decrypt Credentials
+          command: |
+            openssl aes-256-cbc -d -in .circleci/npm_token -k "${KEY}" -out ~/.npmrc
+      - run:
+          name: Deployment to NPM
+          command: |
+            yarn admin -- publish --verbose
+
+  # Windows jobs
+  # CircleCI support for Windows jobs is still in preview.
+  # Docs: https://github.com/CircleCI-Public/windows-preview-docs
+  test-win:
+    <<: *defaults_win
+    # Skipping cache and workspace for now because it takes 10x longer than on linux.
+    # TODO: when/if CircleCI makes them faster, use cache and workspaces fully.
+    # Notes:
+    # - windows needs its own cache key because binaries in node_modules are different.
+    # - windows might need its own workspace for the same reason.
+    # - get cache dir on windows via `yarn cache dir` (was `C:\Users\circleci\AppData\Local\Yarn\Cache\v4` last time)
+    steps:
+      - checkout
+      - *env_win
+      - *post_checkout_win
+      - run: node --version
+      - run: yarn --version
+      - run: yarn install --frozen-lockfile
+      # Build and test should be on their own jobs, but restoring workspaces is too slow
+      # so we do it here.
+      - run: yarn admin -- build
+      - run: yarn test -- --full
+      # Run partial e2e suite on PRs only. Master will run the full e2e suite with sharding.
+      - run: if (Test-Path env:CIRCLE_PR_NUMBER) { node tests\legacy-cli\run_e2e.js "--glob=tests/{basic,ivy}/**" }
+             
+  e2e-cli-win:
+    <<: *defaults_win
+    parallelism: 4
+    steps:     
+      - checkout
+      - *env_win
+      # TODO: remove commands other than the e2e runner when workspaces on windows are well supported.
+      - *post_checkout_win
+      - run: node --version
+      - run: yarn --version
+      - run: yarn install --frozen-lockfile
+      - run: yarn admin -- build
+      - run: node tests\legacy-cli\run_e2e.js --nb-shards=$env:CIRCLE_NODE_TOTAL --shard=$env:CIRCLE_NODE_INDEX
+
+workflows:
+  version: 2
+  default_workflow:
+    jobs:
+      - install
+      - lint:
+          requires:
+            - install
+      - validate:
+          requires:
+            - install
+      - build:
+          requires:
+            - install
+          filters:
+            branches:
+              ignore:
+              - /docs-preview/
+      - build-bazel:
+          requires:
+            - build
+      - test:
+          requires:
+            - build
+      - test-win:
+          requires:
+            - test
+      - test-large:
+          requires:
+            - build
+      - e2e-cli:
+          requires:
+            - build
+      - e2e-cli-ivy:
+          requires:
+            - build
+      - e2e-cli-ng-snapshots:
+          <<: *ignore_pull_requests
+          requires:
+            - e2e-cli
+      - e2e-cli-node-10:
+          <<: *ignore_pull_requests
+          requires:
+            - e2e-cli
+      - e2e-cli-win:
+          <<: *ignore_pull_requests
+          requires:
+            - e2e-cli
+      - snapshot_publish:
+          <<: *ignore_pull_requests
+          requires:
+            - test
+            - build
+            - e2e-cli
+      - publish:
+          requires:
+            - test
+            - build
+            - e2e-cli
+            - snapshot_publish
+          filters:
+            tags:
+              only: /^v\d+/
+            branches:
+              ignore: /.*/
