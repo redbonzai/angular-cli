@@ -1,20 +1,23 @@
 # Usage Metrics Gathering
+
 This document list exactly what is gathered and how.
 
 Any change to analytics should most probably include a change to this document.
 
 # Pageview
+
 Each command creates a pageview with the path `/command/${commandName}/${subcommandName}`. IE.
 `ng generate component my-component --dryRun` would create a page view with the path
 `/command/generate/@schematics_angular/component`.
 
 We use page views to keep track of sessions more effectively, and to tag events to a page.
 
-Project names and target names will be removed. 
+Project names and target names will be removed.
 The command `ng run some-project:lint:some-configuration` will create a page view with the path
 `/command/run`.
 
 # Dimensions
+
 Google Analytics Custom Dimensions are used to track system values and flag values. These
 dimensions are aggregated automatically on the backend.
 
@@ -28,8 +31,7 @@ To create a new dimension (tracking a new flag):
    defined on GA.
 1. Use the ID of the dimension as the `x-user-analytics` value in the `schema.json` file.
 1. Add a new row to the table below in the same PR as the one adding the dimension to the code.
-1. New dimensions PRs need to be approved by [bradgreen@google.com](mailto:bradgreen@google.com),
-   [stephenfluin@google.com](mailto:stephenfluin@google.com) and
+1. New dimensions PRs need to be approved by [stephenfluin@google.com](mailto:stephenfluin@google.com) and
    [iminar@google.com](mailto:iminar@google.com). **This is not negotiable.**
 
 **DO NOT ADD `x-user-analytics` FOR VALUES THAT ARE USER IDENTIFIABLE (PII), FOR EXAMPLE A
@@ -38,27 +40,27 @@ PROJECT NAME TO BUILD OR A MODULE NAME.**
 Note: There's a limit of 20 custom dimensions.
 
 ### List Of All Dimensions
+
 <!--DIMENSIONS_TABLE_BEGIN-->
 | Id | Flag | Type |
 |:---:|:---|:---|
 | 1 | `CPU Count` | `number` |
 | 2 | `CPU Speed` | `number` |
-| 3 | `RAM (In MB)` | `number` |
+| 3 | `RAM (In GB)` | `number` |
 | 4 | `Node Version` | `number` |
 | 5 | `Flag: --style` | `string` |
 | 6 | `--collection` | `string` |
-| 7 | `--buildEventLog` | `boolean` |
-| 8 | `Flag: --enableIvy` | `boolean` |
-| 9 | `Flag: --inlineStyle` | `boolean` |
-| 10 | `Flag: --inlineTemplate` | `boolean` |
-| 11 | `Flag: --viewEncapsulation` | `string` |
-| 12 | `Flag: --skipTests` | `boolean` |
+| 7 | `Flag: --strict` | `boolean` |
+| 8 | `AOT Enabled` | `boolean` |
+| 9 | `Flag: --inline-style` | `boolean` |
+| 10 | `Flag: --inline-template` | `boolean` |
+| 11 | `Flag: --view-encapsulation` | `string` |
+| 12 | `Flag: --skip-tests` | `boolean` |
 | 13 | `Flag: --aot` | `boolean` |
 | 14 | `Flag: --minimal` | `boolean` |
-| 15 | `Flag: --lintFix` | `boolean` |
 | 16 | `Flag: --optimization` | `boolean` |
 | 17 | `Flag: --routing` | `boolean` |
-| 18 | `Flag: --skipImport` | `boolean` |
+| 18 | `Flag: --skip-import` | `boolean` |
 | 19 | `Flag: --export` | `boolean` |
 | 20 | `Build Errors (comma separated)` | `string` |
 <!--DIMENSIONS_TABLE_END-->
@@ -66,10 +68,11 @@ Note: There's a limit of 20 custom dimensions.
 # Metrics
 
 ### List of All Metrics
+
 <!--METRICS_TABLE_BEGIN-->
 | Id | Flag | Type |
 |:---:|:---|:---|
-| 1 | `UNUSED_1` | `none` |
+| 1 | `NgComponentCount` | `number` |
 | 2 | `UNUSED_2` | `none` |
 | 3 | `UNUSED_3` | `none` |
 | 4 | `UNUSED_4` | `none` |
@@ -87,12 +90,14 @@ Note: There's a limit of 20 custom dimensions.
 <!--METRICS_TABLE_END-->
 
 # Operating System and Node Version
+
 A User Agent string is built to "fool" Google Analytics into reading the Operating System and
 version fields from it. The base dimensions are used for those.
 
 Node version is our App ID, but a dimension is also used to get the numeric MAJOR.MINOR of node.
 
 # Debugging
+
 Using `DEBUG=universal-analytics` will report all calls to the universal-analytics library,
 including queuing events and sending them to the server.
 
@@ -106,6 +111,7 @@ Using `DEBUG=ng:analytics:log` will show what we actually send to GA.
 See [the `debug` NPM library](https://www.npmjs.com/package/debug) for more information.
 
 # Disabling Usage Analytics
+
 There are 2 ways of disabling usage analytics:
 
 1. using `ng analytics off` (or changing the global configuration file yourself). This is the same
@@ -116,9 +122,10 @@ There are 2 ways of disabling usage analytics:
    below).
 
 # CI
+
 A special user named `ci` is used for analytics for tracking CI information. This is a convention
 and is in no way enforced.
 
 Running on CI by default will disable analytics (because of a lack of TTY on STDIN/OUT). It can be
 manually enabled using either a global configuration with a value of `ci`, or using the
-`NG_CLI_ANALYTICS=ci` environment variable. 
+`NG_CLI_ANALYTICS=ci` environment variable.

@@ -1,10 +1,9 @@
 {
-  // Test comment
   "compilerOptions": {
     "baseUrl": "",
-    "module": "es2015",
+    "module": "es2020",
     "moduleResolution": "node",
-    "target": "es5",
+    "target": "es2015",
     "noImplicitAny": false,
     "sourceMap": true,
     "mapRoot": "",
@@ -19,6 +18,8 @@
     "rootDir": "."
   },
   "angularCompilerOptions": {
+    "enableIvy": true,
+    "disableTypeScriptVersionCheck": true,
     "genDir": "./app/ngfactory",
     "entryModule": "app/app.module#AppModule"
   }

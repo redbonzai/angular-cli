@@ -1,21 +1,14 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
 
-import {
-  BaseException,
-  Path,
-  getSystemPath,
-  join,
-  normalize,
-  virtualFs,
-} from '@angular-devkit/core';
-import { FileReplacement } from '../browser/schema';
-
+import { BaseException, Path, getSystemPath, join, normalize } from '@angular-devkit/core';
+import { existsSync } from 'fs';
+import { FileReplacement } from '../builders/browser/schema';
 
 export class MissingFileReplacementException extends BaseException {
   constructor(path: String) {
@@ -30,22 +23,22 @@ export interface NormalizedFileReplacement {
 
 export function normalizeFileReplacements(
   fileReplacements: FileReplacement[],
-  host: virtualFs.SyncDelegateHost,
   root: Path,
 ): NormalizedFileReplacement[] {
   if (fileReplacements.length === 0) {
     return [];
   }
 
-  const normalizedReplacement = fileReplacements
-    .map(replacement => normalizeFileReplacement(replacement, root));
+  const normalizedReplacement = fileReplacements.map((replacement) =>
+    normalizeFileReplacement(replacement, root),
+  );
 
   for (const { replace, with: replacementWith } of normalizedReplacement) {
-    if (!host.exists(replacementWith)) {
+    if (!existsSync(getSystemPath(replacementWith))) {
       throw new MissingFileReplacementException(getSystemPath(replacementWith));
     }
 
-    if (!host.exists(replace)) {
+    if (!existsSync(getSystemPath(replace))) {
       throw new MissingFileReplacementException(getSystemPath(replace));
     }
   }

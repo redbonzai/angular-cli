@@ -1,47 +1,36 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
+import { logging, normalize, schema, strings, tags, workspaces } from '@angular-devkit/core';
 import {
-  experimental,
-  json,
-  logging,
-  normalize,
-  schema,
-  strings,
-  tags,
-  terminal,
-  virtualFs,
-} from '@angular-devkit/core';
-import { NodeJsSyncHost } from '@angular-devkit/core/node';
-import { DryRunEvent, UnsuccessfulWorkflowExecution, workflow } from '@angular-devkit/schematics';
+  DryRunEvent,
+  UnsuccessfulWorkflowExecution,
+  formats,
+  workflow,
+} from '@angular-devkit/schematics';
 import {
   FileSystemCollection,
   FileSystemEngine,
   FileSystemSchematic,
   NodeWorkflow,
-  validateOptionsWithSchema,
 } from '@angular-devkit/schematics/tools';
 import * as inquirer from 'inquirer';
 import * as systemPath from 'path';
-import { WorkspaceLoader } from '../models/workspace-loader';
-import {
-  getProjectByCwd,
-  getSchematicDefaults,
-  getWorkspace,
-  getWorkspaceRaw,
-} from '../utilities/config';
+import { colors } from '../utilities/color';
+import { getProjectByCwd, getSchematicDefaults, getWorkspace } from '../utilities/config';
 import { parseJsonSchemaToOptions } from '../utilities/json-schema';
-import { getPackageManager } from '../utilities/package-manager';
+import { ensureCompatibleNpm, getPackageManager } from '../utilities/package-manager';
 import { isTTY } from '../utilities/tty';
 import { isPackageNameSafeForAnalytics } from './analytics';
 import { BaseCommandOptions, Command } from './command';
 import { Arguments, CommandContext, CommandDescription, Option } from './interface';
 import { parseArguments, parseFreeFormArguments } from './parser';
-
+import { SchematicEngineHost } from './schematic-engine-host';
 
 export interface BaseSchematicSchema {
   debug?: boolean;
@@ -49,6 +38,7 @@ export interface BaseSchematicSchema {
   force?: boolean;
   interactive?: boolean;
   defaults?: boolean;
+  packageRegistry?: string;
 }
 
 export interface RunSchematicOptions extends BaseSchematicSchema {
@@ -59,7 +49,6 @@ export interface RunSchematicOptions extends BaseSchematicSchema {
   showNothingDone?: boolean;
 }
 
-
 export class UnknownCollectionError extends Error {
   constructor(collectionName: string) {
     super(`Invalid collection (${collectionName}).`);
@@ -67,29 +56,22 @@ export class UnknownCollectionError extends Error {
 }
 
 export abstract class SchematicCommand<
-  T extends (BaseSchematicSchema & BaseCommandOptions),
+  T extends BaseSchematicSchema & BaseCommandOptions,
 > extends Command<T> {
-  readonly allowPrivateSchematics: boolean = false;
-  readonly allowAdditionalArgs: boolean = false;
-  private _host = new NodeJsSyncHost();
-  private _workspace: experimental.workspace.Workspace;
-  protected _workflow: NodeWorkflow;
+  protected readonly allowPrivateSchematics: boolean = false;
+  protected override readonly useReportAnalytics = false;
+  protected _workflow!: NodeWorkflow;
 
-  private readonly defaultCollectionName = '@schematics/angular';
+  protected defaultCollectionName = '@schematics/angular';
   protected collectionName = this.defaultCollectionName;
   protected schematicName?: string;
 
-  constructor(
-    context: CommandContext,
-    description: CommandDescription,
-    logger: logging.Logger,
-  ) {
+  constructor(context: CommandContext, description: CommandDescription, logger: logging.Logger) {
     super(context, description, logger);
   }
 
-  public async initialize(options: T & Arguments) {
-    await this._loadWorkspace();
-    this.createWorkflow(options);
+  public override async initialize(options: T & Arguments) {
+    await this.createWorkflow(options);
 
     if (this.schematicName) {
       // Set the options.
@@ -100,24 +82,23 @@ export abstract class SchematicCommand<
         schematic.description.schemaJson || {},
       );
 
-      this.description.options.push(...options.filter(x => !x.hidden));
+      this.description.description = schematic.description.description;
+      this.description.options.push(...options.filter((x) => !x.hidden));
 
       // Remove any user analytics from schematics that are NOT part of our safelist.
       for (const o of this.description.options) {
-        if (o.userAnalytics) {
-          if (!isPackageNameSafeForAnalytics(this.collectionName)) {
-            o.userAnalytics = undefined;
-          }
+        if (o.userAnalytics && !isPackageNameSafeForAnalytics(this.collectionName)) {
+          o.userAnalytics = undefined;
         }
       }
     }
   }
 
-  public async printHelp(options: T & Arguments) {
-    await super.printHelp(options);
+  public override async printHelp() {
+    await super.printHelp();
     this.logger.info('');
 
-    const subCommandOption = this.description.options.filter(x => x.subcommands)[0];
+    const subCommandOption = this.description.options.filter((x) => x.subcommands)[0];
 
     if (!subCommandOption || !subCommandOption.subcommands) {
       return 0;
@@ -129,7 +110,7 @@ export abstract class SchematicCommand<
       this.logger.info('Available Schematics:');
 
       const namesPerCollection: { [c: string]: string[] } = {};
-      schematicNames.forEach(name => {
+      schematicNames.forEach((name) => {
         let [collectionName, schematicName] = name.split(/:/, 2);
         if (!schematicName) {
           schematicName = collectionName;
@@ -143,27 +124,22 @@ export abstract class SchematicCommand<
         namesPerCollection[collectionName].push(schematicName);
       });
 
-      const defaultCollection = this.getDefaultSchematicCollection();
-      Object.keys(namesPerCollection).forEach(collectionName => {
+      const defaultCollection = await this.getDefaultSchematicCollection();
+      Object.keys(namesPerCollection).forEach((collectionName) => {
         const isDefault = defaultCollection == collectionName;
-        this.logger.info(
-          `  Collection "${collectionName}"${isDefault ? ' (default)' : ''}:`,
-        );
+        this.logger.info(`  Collection "${collectionName}"${isDefault ? ' (default)' : ''}:`);
 
-        namesPerCollection[collectionName].forEach(schematicName => {
+        namesPerCollection[collectionName].forEach((schematicName) => {
           this.logger.info(`    ${schematicName}`);
         });
       });
-    } else if (schematicNames.length == 1) {
-      this.logger.info('Help for schematic ' + schematicNames[0]);
-      await this.printHelpSubcommand(subCommandOption.subcommands[schematicNames[0]]);
     }
 
     return 0;
   }
 
-  async printHelpUsage() {
-    const subCommandOption = this.description.options.filter(x => x.subcommands)[0];
+  override async printHelpUsage() {
+    const subCommandOption = this.description.options.filter((x) => x.subcommands)[0];
 
     if (!subCommandOption || !subCommandOption.subcommands) {
       return;
@@ -173,20 +149,22 @@ export abstract class SchematicCommand<
     if (schematicNames.length == 1) {
       this.logger.info(this.description.description);
 
-      const opts = this.description.options.filter(x => x.positional === undefined);
+      const opts = this.description.options.filter((x) => x.positional === undefined);
       const [collectionName, schematicName] = schematicNames[0].split(/:/)[0];
 
       // Display <collectionName:schematicName> if this is not the default collectionName,
       // otherwise just show the schematicName.
-      const displayName = collectionName == this.getDefaultSchematicCollection()
-        ? schematicName
-        : schematicNames[0];
+      const displayName =
+        collectionName == (await this.getDefaultSchematicCollection())
+          ? schematicName
+          : schematicNames[0];
 
       const schematicOptions = subCommandOption.subcommands[schematicNames[0]].options;
-      const schematicArgs = schematicOptions.filter(x => x.positional !== undefined);
-      const argDisplay = schematicArgs.length > 0
-        ? ' ' + schematicArgs.map(a => `<${strings.dasherize(a.name)}>`).join(' ')
-        : '';
+      const schematicArgs = schematicOptions.filter((x) => x.positional !== undefined);
+      const argDisplay =
+        schematicArgs.length > 0
+          ? ' ' + schematicArgs.map((a) => `<${strings.dasherize(a.name)}>`).join(' ')
+          : '';
 
       this.logger.info(tags.oneLine`
         usage: ng ${this.description.name} ${displayName}${argDisplay}
@@ -227,8 +205,8 @@ export abstract class SchematicCommand<
     }
 
     return options
-      .filter(o => o.format === 'path')
-      .map(o => o.name)
+      .filter((o) => o.format === 'path')
+      .map((o) => o.name)
       .reduce((acc, curr) => {
         acc[curr] = workingDir;
 
@@ -239,115 +217,163 @@ export abstract class SchematicCommand<
   /*
    * Runtime hook to allow specifying customized workflow
    */
-  protected createWorkflow(options: BaseSchematicSchema): workflow.BaseWorkflow {
+  protected async createWorkflow(options: BaseSchematicSchema): Promise<workflow.BaseWorkflow> {
     if (this._workflow) {
       return this._workflow;
     }
 
     const { force, dryRun } = options;
-    const fsHost = new virtualFs.ScopedHost(new NodeJsSyncHost(), normalize(this.workspace.root));
+    const root = this.context.root;
+    const workflow = new NodeWorkflow(root, {
+      force,
+      dryRun,
+      packageManager: await getPackageManager(root),
+      packageRegistry: options.packageRegistry,
+      // A schema registry is required to allow customizing addUndefinedDefaults
+      registry: new schema.CoreSchemaRegistry(formats.standardFormats),
+      resolvePaths: this.workspace
+        ? // Workspace
+          this.collectionName === this.defaultCollectionName
+          ? // Favor __dirname for @schematics/angular to use the build-in version
+            [__dirname, process.cwd(), root]
+          : [process.cwd(), root, __dirname]
+        : // Global
+          [__dirname, process.cwd()],
+      schemaValidation: true,
+      optionTransforms: [
+        // Add configuration file defaults
+        async (schematic, current) => {
+          const projectName =
+            typeof (current as Record<string, unknown>).project === 'string'
+              ? ((current as Record<string, unknown>).project as string)
+              : getProjectName();
 
-    const workflow = new NodeWorkflow(
-        fsHost,
-        {
-          force,
-          dryRun,
-          packageManager: getPackageManager(this.workspace.root),
-          root: normalize(this.workspace.root),
+          return {
+            ...(await getSchematicDefaults(schematic.collection.name, schematic.name, projectName)),
+            ...current,
+          };
         },
-    );
-    workflow.engineHost.registerContextTransform(context => {
-      // This is run by ALL schematics, so if someone uses `externalSchematics(...)` which
-      // is safelisted, it would move to the right analytics (even if their own isn't).
-      const collectionName: string = context.schematic.collection.description.name;
-      if (isPackageNameSafeForAnalytics(collectionName)) {
-        return {
-          ...context,
-          analytics: this.analytics,
-        };
-      } else {
-        return context;
-      }
+      ],
+      engineHostCreator: (options) => new SchematicEngineHost(options.resolvePaths),
     });
 
-    workflow.engineHost.registerOptionsTransform(validateOptionsWithSchema(workflow.registry));
+    const getProjectName = () => {
+      if (this.workspace) {
+        const projectNames = getProjectsByPath(
+          this.workspace,
+          process.cwd(),
+          this.workspace.basePath,
+        );
 
-    if (options.defaults) {
-      workflow.registry.addPreTransform(schema.transforms.addUndefinedDefaults);
-    } else {
-      workflow.registry.addPostTransform(schema.transforms.addUndefinedDefaults);
-    }
-
-    workflow.registry.addSmartDefaultProvider('projectName', () => {
-      if (this._workspace) {
-        try {
-          return this._workspace.getProjectByPath(normalize(process.cwd()))
-            || this._workspace.getDefaultProjectName();
-        } catch (e) {
-          if (e instanceof experimental.workspace.AmbiguousProjectPathException) {
+        if (projectNames.length === 1) {
+          return projectNames[0];
+        } else {
+          if (projectNames.length > 1) {
             this.logger.warn(tags.oneLine`
               Two or more projects are using identical roots.
               Unable to determine project using current working directory.
               Using default workspace project instead.
             `);
-
-            return this._workspace.getDefaultProjectName();
           }
-          throw e;
+
+          const defaultProjectName = this.workspace.extensions['defaultProject'];
+          if (typeof defaultProjectName === 'string' && defaultProjectName) {
+            return defaultProjectName;
+          }
         }
       }
 
       return undefined;
+    };
+
+    workflow.registry.addPostTransform(schema.transforms.addUndefinedDefaults);
+    workflow.registry.addSmartDefaultProvider('projectName', getProjectName);
+    workflow.registry.useXDeprecatedProvider((msg) => this.logger.warn(msg));
+
+    let shouldReportAnalytics = true;
+    workflow.engineHost.registerOptionsTransform(async (_, options) => {
+      if (shouldReportAnalytics) {
+        shouldReportAnalytics = false;
+        await this.reportAnalytics([this.description.name], options as Arguments);
+      }
+
+      return options;
     });
 
     if (options.interactive !== false && isTTY()) {
       workflow.registry.usePromptProvider((definitions: Array<schema.PromptDefinition>) => {
-        const questions: inquirer.Questions = definitions.map(definition => {
-          const question: inquirer.Question = {
-            name: definition.id,
-            message: definition.message,
-            default: definition.default,
-          };
+        const questions: inquirer.QuestionCollection = definitions
+          .filter((definition) => !options.defaults || definition.default === undefined)
+          .map((definition) => {
+            const question: inquirer.Question = {
+              name: definition.id,
+              message: definition.message,
+              default: definition.default,
+            };
 
-          const validator = definition.validator;
-          if (validator) {
-            question.validate = input => validator(input);
-          }
+            const validator = definition.validator;
+            if (validator) {
+              question.validate = (input) => validator(input);
 
-          switch (definition.type) {
-            case 'confirmation':
-              question.type = 'confirm';
-              break;
-            case 'list':
-              question.type = !!definition.multiselect ? 'checkbox' : 'list';
-              question.choices = definition.items && definition.items.map(item => {
-                if (typeof item == 'string') {
-                  return item;
-                } else {
-                  return {
-                    name: item.label,
-                    value: item.value,
-                  };
+              // Filter allows transformation of the value prior to validation
+              question.filter = async (input) => {
+                for (const type of definition.propertyTypes) {
+                  let value;
+                  switch (type) {
+                    case 'string':
+                      value = String(input);
+                      break;
+                    case 'integer':
+                    case 'number':
+                      value = Number(input);
+                      break;
+                    default:
+                      value = input;
+                      break;
+                  }
+                  // Can be a string if validation fails
+                  const isValid = (await validator(value)) === true;
+                  if (isValid) {
+                    return value;
+                  }
                 }
-              });
-              break;
-            default:
-              question.type = definition.type;
-              break;
-          }
 
-          return question;
-        });
+                return input;
+              };
+            }
+
+            switch (definition.type) {
+              case 'confirmation':
+                question.type = 'confirm';
+                break;
+              case 'list':
+                question.type = definition.multiselect ? 'checkbox' : 'list';
+                (question as inquirer.CheckboxQuestion).choices = definition.items?.map((item) => {
+                  return typeof item == 'string'
+                    ? item
+                    : {
+                        name: item.label,
+                        value: item.value,
+                      };
+                });
+                break;
+              default:
+                question.type = definition.type;
+                break;
+            }
+
+            return question;
+          });
 
         return inquirer.prompt(questions);
       });
     }
 
-    return this._workflow = workflow;
+    return (this._workflow = workflow);
   }
 
-  protected getDefaultSchematicCollection(): string {
-    let workspace = getWorkspace('local');
+  protected async getDefaultSchematicCollection(): Promise<string> {
+    let workspace = await getWorkspace('local');
 
     if (workspace) {
       const project = getProjectByCwd(workspace);
@@ -365,7 +391,7 @@ export abstract class SchematicCommand<
       }
     }
 
-    workspace = getWorkspace('global');
+    workspace = await getWorkspace('global');
     if (workspace && workspace.getCli()) {
       const value = workspace.getCli()['defaultCollection'];
       if (typeof value == 'string') {
@@ -386,7 +412,7 @@ export abstract class SchematicCommand<
 
     const workflow = this._workflow;
 
-    const workingDir = normalize(systemPath.relative(this.workspace.root, process.cwd()));
+    const workingDir = normalize(systemPath.relative(this.context.root, process.cwd()));
 
     // Get the option object from the schematic schema.
     const schematic = this.getSchematic(
@@ -399,43 +425,6 @@ export abstract class SchematicCommand<
     collectionName = schematic.collection.description.name;
     schematicName = schematic.description.name;
 
-    // TODO: Remove warning check when 'targets' is default
-    if (collectionName !== this.defaultCollectionName) {
-      const [ast, configPath] = getWorkspaceRaw('local');
-      if (ast) {
-        const projectsKeyValue = ast.properties.find(p => p.key.value === 'projects');
-        if (!projectsKeyValue || projectsKeyValue.value.kind !== 'object') {
-          return;
-        }
-
-        const positions: json.Position[] = [];
-        for (const projectKeyValue of projectsKeyValue.value.properties) {
-          const projectNode = projectKeyValue.value;
-          if (projectNode.kind !== 'object') {
-            continue;
-          }
-          const targetsKeyValue = projectNode.properties.find(p => p.key.value === 'targets');
-          if (targetsKeyValue) {
-            positions.push(targetsKeyValue.start);
-          }
-        }
-
-        if (positions.length > 0) {
-          const warning = tags.oneLine`
-            WARNING: This command may not execute successfully.
-            The package/collection may not support the 'targets' field within '${configPath}'.
-            This can be corrected by renaming the following 'targets' fields to 'architect':
-          `;
-
-          const locations = positions
-            .map((p, i) => `${i + 1}) Line: ${p.line + 1}; Column: ${p.character + 1}`)
-            .join('\n');
-
-          this.logger.warn(warning + '\n' + locations + '\n');
-        }
-      }
-    }
-
     // Set the options of format "path".
     let o: Option[] | null = null;
     let args: Arguments;
@@ -447,9 +436,12 @@ export abstract class SchematicCommand<
       args = await this.parseArguments(schematicOptions || [], o);
     }
 
-    // ng-add is special because we don't know all possible options at this point
-    if (args['--'] && !this.allowAdditionalArgs) {
-      args['--'].forEach(additional => {
+    const allowAdditionalProperties =
+      typeof schematic.description.schemaJson === 'object' &&
+      schematic.description.schemaJson.additionalProperties;
+
+    if (args['--'] && !allowAdditionalProperties) {
+      args['--'].forEach((additional) => {
         this.logger.fatal(`Unknown option: '${additional.split(/=/)[0]}'`);
       });
 
@@ -457,14 +449,9 @@ export abstract class SchematicCommand<
     }
 
     const pathOptions = o ? this.setPathOptions(o, workingDir) : {};
-    let input = { ...pathOptions, ...args };
-
-    // Read the default values from the workspace.
-    const projectName = input.project !== undefined ? '' + input.project : null;
-    const defaults = getSchematicDefaults(collectionName, schematicName, projectName);
-    input = {
-      ...defaults,
-      ...input,
+    const input = {
+      ...pathOptions,
+      ...args,
       ...options.additionalOptions,
     };
 
@@ -482,28 +469,29 @@ export abstract class SchematicCommand<
           break;
         case 'update':
           loggingQueue.push(tags.oneLine`
-            ${terminal.white('UPDATE')} ${eventPath} (${event.content.length} bytes)
+            ${colors.cyan('UPDATE')} ${eventPath} (${event.content.length} bytes)
           `);
           break;
         case 'create':
           loggingQueue.push(tags.oneLine`
-            ${terminal.green('CREATE')} ${eventPath} (${event.content.length} bytes)
+            ${colors.green('CREATE')} ${eventPath} (${event.content.length} bytes)
           `);
           break;
         case 'delete':
-          loggingQueue.push(`${terminal.yellow('DELETE')} ${eventPath}`);
+          loggingQueue.push(`${colors.yellow('DELETE')} ${eventPath}`);
           break;
         case 'rename':
-          loggingQueue.push(`${terminal.blue('RENAME')} ${eventPath} => ${event.to}`);
+          const eventToPath = event.to.startsWith('/') ? event.to.substr(1) : event.to;
+          loggingQueue.push(`${colors.blue('RENAME')} ${eventPath} => ${eventToPath}`);
           break;
       }
     });
 
-    workflow.lifeCycle.subscribe(event => {
+    workflow.lifeCycle.subscribe((event) => {
       if (event.kind == 'end' || event.kind == 'post-tasks-start') {
         if (!error) {
           // Output the logging queue, no error happened.
-          loggingQueue.forEach(log => this.logger.info(log));
+          loggingQueue.forEach((log) => this.logger.info(log));
         }
 
         loggingQueue = [];
@@ -511,40 +499,51 @@ export abstract class SchematicCommand<
       }
     });
 
-    return new Promise<number | void>((resolve) => {
-      workflow.execute({
-        collection: collectionName,
-        schematic: schematicName,
-        options: input,
-        debug: debug,
-        logger: this.logger,
-        allowPrivate: this.allowPrivateSchematics,
-      })
-      .subscribe({
-        error: (err: Error) => {
-          // In case the workflow was not successful, show an appropriate error message.
-          if (err instanceof UnsuccessfulWorkflowExecution) {
-            // "See above" because we already printed the error.
-            this.logger.fatal('The Schematic workflow failed. See above.');
-          } else if (debug) {
-            this.logger.fatal(`An error occured:\n${err.message}\n${err.stack}`);
-          } else {
-            this.logger.fatal(err.message);
-          }
+    // Temporary compatibility check for NPM 7
+    if (collectionName === '@schematics/angular' && schematicName === 'ng-new') {
+      if (
+        !input.skipInstall &&
+        (input.packageManager === undefined || input.packageManager === 'npm')
+      ) {
+        await ensureCompatibleNpm(this.context.root);
+      }
+    }
 
-          resolve(1);
-        },
-        complete: () => {
-          const showNothingDone = !(options.showNothingDone === false);
-          if (nothingDone && showNothingDone) {
-            this.logger.info('Nothing to be done.');
-          }
-          if (dryRun) {
-            this.logger.warn(`\nNOTE: The "dryRun" flag means no changes were made.`);
-          }
-          resolve();
-        },
-      });
+    return new Promise<number | void>((resolve) => {
+      workflow
+        .execute({
+          collection: collectionName,
+          schematic: schematicName,
+          options: input,
+          debug: debug,
+          logger: this.logger,
+          allowPrivate: this.allowPrivateSchematics,
+        })
+        .subscribe({
+          error: (err: Error) => {
+            // In case the workflow was not successful, show an appropriate error message.
+            if (err instanceof UnsuccessfulWorkflowExecution) {
+              // "See above" because we already printed the error.
+              this.logger.fatal('The Schematic workflow failed. See above.');
+            } else if (debug) {
+              this.logger.fatal(`An error occurred:\n${err.message}\n${err.stack}`);
+            } else {
+              this.logger.fatal(err.message);
+            }
+
+            resolve(1);
+          },
+          complete: () => {
+            const showNothingDone = !(options.showNothingDone === false);
+            if (nothingDone && showNothingDone) {
+              this.logger.info('Nothing to be done.');
+            }
+            if (dryRun) {
+              this.logger.warn(`\nNOTE: The "dryRun" flag means no changes were made.`);
+            }
+            resolve();
+          },
+        });
     });
   }
 
@@ -558,20 +557,43 @@ export abstract class SchematicCommand<
   ): Promise<Arguments> {
     return parseArguments(schematicOptions, options, this.logger);
   }
+}
 
-  private async _loadWorkspace() {
-    if (this._workspace) {
-      return;
-    }
-    const workspaceLoader = new WorkspaceLoader(this._host);
-
-    try {
-      this._workspace = await workspaceLoader.loadWorkspace(this.workspace.root);
-    } catch (err) {
-      if (!this.allowMissingWorkspace) {
-        // Ignore missing workspace
-        throw err;
-      }
-    }
+function getProjectsByPath(
+  workspace: workspaces.WorkspaceDefinition,
+  path: string,
+  root: string,
+): string[] {
+  if (workspace.projects.size === 1) {
+    return Array.from(workspace.projects.keys());
   }
+
+  const isInside = (base: string, potential: string): boolean => {
+    const absoluteBase = systemPath.resolve(root, base);
+    const absolutePotential = systemPath.resolve(root, potential);
+    const relativePotential = systemPath.relative(absoluteBase, absolutePotential);
+    if (!relativePotential.startsWith('..') && !systemPath.isAbsolute(relativePotential)) {
+      return true;
+    }
+
+    return false;
+  };
+
+  const projects = Array.from(workspace.projects.entries())
+    .map(([name, project]) => [systemPath.resolve(root, project.root), name] as [string, string])
+    .filter((tuple) => isInside(tuple[0], path))
+    // Sort tuples by depth, with the deeper ones first. Since the first member is a path and
+    // we filtered all invalid paths, the longest will be the deepest (and in case of equality
+    // the sort is stable and the first declared project will win).
+    .sort((a, b) => b[0].length - a[0].length);
+
+  if (projects.length === 1) {
+    return [projects[0][1]];
+  } else if (projects.length > 1) {
+    const firstPath = projects[0][0];
+
+    return projects.filter((v) => v[0] === firstPath).map((v) => v[1]);
+  }
+
+  return [];
 }

@@ -1,16 +1,16 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import {
   Path,
   PathFragment,
   PathIsDirectoryException,
   PathIsFileException,
-  clean,
   dirname,
   join,
   normalize,
@@ -33,6 +33,7 @@ import {
   OverwriteFileAction,
   RenameFileAction,
 } from './action';
+import { DelegateTree } from './delegate';
 import { LazyFileEntry } from './entry';
 import {
   DirEntry,
@@ -46,10 +47,9 @@ import {
   UpdateRecorder,
 } from './interface';
 import { UpdateRecorderBase } from './recorder';
-
+import { ScopedTree } from './scoped';
 
 let _uniqueId = 0;
-
 
 export class HostDirEntry implements DirEntry {
   constructor(
@@ -60,12 +60,14 @@ export class HostDirEntry implements DirEntry {
   ) {}
 
   get subdirs(): PathFragment[] {
-    return this._host.list(this.path)
-      .filter(fragment => this._host.isDirectory(join(this.path, fragment)));
+    return this._host
+      .list(this.path)
+      .filter((fragment) => this._host.isDirectory(join(this.path, fragment)));
   }
   get subfiles(): PathFragment[] {
-    return this._host.list(this.path)
-      .filter(fragment => this._host.isFile(join(this.path, fragment)));
+    return this._host
+      .list(this.path)
+      .filter((fragment) => this._host.isFile(join(this.path, fragment)));
   }
 
   dir(name: PathFragment): DirEntry {
@@ -77,7 +79,7 @@ export class HostDirEntry implements DirEntry {
 
   visit(visitor: FileVisitor): void {
     try {
-      this.getSubfilesRecursively().forEach(file => visitor(file.path, file));
+      this.getSubfilesRecursively().forEach((file) => visitor(file.path, file));
     } catch (e) {
       if (e !== FileVisitorCancelToken) {
         throw e;
@@ -87,16 +89,15 @@ export class HostDirEntry implements DirEntry {
 
   private getSubfilesRecursively() {
     function _recurse(entry: DirEntry): FileEntry[] {
-      return entry.subdirs.reduce((files, subdir) => [
-        ...files,
-        ..._recurse(entry.dir(subdir)),
-      ], entry.subfiles.map(subfile => entry.file(subfile) as FileEntry));
+      return entry.subdirs.reduce(
+        (files, subdir) => [...files, ..._recurse(entry.dir(subdir))],
+        entry.subfiles.map((subfile) => entry.file(subfile) as FileEntry),
+      );
     }
 
     return _recurse(this);
   }
 }
-
 
 export class HostTree implements Tree {
   private readonly _id = --_uniqueId;
@@ -105,7 +106,6 @@ export class HostTree implements Tree {
   private _ancestry = new Set<number>();
 
   private _dirCache = new Map<Path, HostDirEntry>();
-
 
   [TreeSymbol]() {
     return this;
@@ -148,12 +148,6 @@ export class HostTree implements Tree {
     return this._record.willRename(path);
   }
 
-  // This can be used by old Schematics library with new Trees in some corner cases.
-  // TODO: remove this for 7.0
-  optimize() {
-    return this;
-  }
-
   branch(): Tree {
     const branchedTree = new HostTree(this._backend);
     branchedTree._record = this._record.clone();
@@ -163,13 +157,27 @@ export class HostTree implements Tree {
     return branchedTree;
   }
 
+  private isAncestorOf(tree: Tree): boolean {
+    if (tree instanceof HostTree) {
+      return tree._ancestry.has(this._id);
+    }
+    if (tree instanceof DelegateTree) {
+      return this.isAncestorOf(((tree as unknown) as { _other: Tree })._other);
+    }
+    if (tree instanceof ScopedTree) {
+      return this.isAncestorOf(((tree as unknown) as { _base: Tree })._base);
+    }
+
+    return false;
+  }
+
   merge(other: Tree, strategy: MergeStrategy = MergeStrategy.Default): void {
     if (other === this) {
       // Merging with yourself? Tsk tsk. Nothing to do at least.
       return;
     }
 
-    if (other instanceof HostTree && other._ancestry.has(this._id)) {
+    if (this.isAncestorOf(other)) {
       // Workaround for merging a branch back into one of its ancestors
       // More complete branch point tracking is required to avoid
       strategy |= MergeStrategy.Overwrite;
@@ -180,14 +188,14 @@ export class HostTree implements Tree {
     const overwriteConflictAllowed =
       (strategy & MergeStrategy.AllowOverwriteConflict) == MergeStrategy.AllowOverwriteConflict;
     const deleteConflictAllowed =
-      (strategy & MergeStrategy.AllowOverwriteConflict) == MergeStrategy.AllowDeleteConflict;
+      (strategy & MergeStrategy.AllowDeleteConflict) == MergeStrategy.AllowDeleteConflict;
 
-    other.actions.forEach(action => {
+    other.actions.forEach((action) => {
       switch (action.kind) {
         case 'c': {
           const { path, content } = action;
 
-          if ((this._willCreate(path) || this._willOverwrite(path))) {
+          if (this._willCreate(path) || this._willOverwrite(path) || this.exists(path)) {
             const existingContent = this.read(path);
             if (existingContent && content.equals(existingContent)) {
               // Identical outcome; no action required
@@ -198,9 +206,9 @@ export class HostTree implements Tree {
               throw new MergeConflictException(path);
             }
 
-            this._record.overwrite(path, content as {} as virtualFs.FileBuffer).subscribe();
+            this._record.overwrite(path, (content as {}) as virtualFs.FileBuffer).subscribe();
           } else {
-            this._record.create(path, content as {} as virtualFs.FileBuffer).subscribe();
+            this._record.create(path, (content as {}) as virtualFs.FileBuffer).subscribe();
           }
 
           return;
@@ -226,7 +234,7 @@ export class HostTree implements Tree {
           }
           // We use write here as merge validation has already been done, and we want to let
           // the CordHost do its job.
-          this._record.write(path, content as {} as virtualFs.FileBuffer).subscribe();
+          this._record.write(path, (content as {}) as virtualFs.FileBuffer).subscribe();
 
           return;
         }
@@ -329,7 +337,7 @@ export class HostTree implements Tree {
       throw new FileDoesNotExistException(p);
     }
     const c = typeof content == 'string' ? Buffer.from(content) : content;
-    this._record.overwrite(p, c as {} as virtualFs.FileBuffer).subscribe();
+    this._record.overwrite(p, (c as {}) as virtualFs.FileBuffer).subscribe();
   }
   beginUpdate(path: string): UpdateRecorder {
     const entry = this.get(path);
@@ -347,7 +355,9 @@ export class HostTree implements Tree {
         throw new ContentHasMutatedException(path);
       } else {
         const newContent = record.apply(entry.content);
-        this.overwrite(path, newContent);
+        if (!newContent.equals(entry.content)) {
+          this.overwrite(path, newContent);
+        }
       }
     } else {
       throw new InvalidUpdateRecordException();
@@ -361,7 +371,7 @@ export class HostTree implements Tree {
       throw new FileAlreadyExistException(p);
     }
     const c = typeof content == 'string' ? Buffer.from(content) : content;
-    this._record.create(p, c as {} as virtualFs.FileBuffer).subscribe();
+    this._record.create(p, (c as {}) as virtualFs.FileBuffer).subscribe();
   }
   delete(path: string): void {
     this._recordSync.delete(this._normalizePath(path));
@@ -373,52 +383,53 @@ export class HostTree implements Tree {
   apply(action: Action, strategy?: MergeStrategy): void {
     throw new SchematicsException('Apply not implemented on host trees.');
   }
+
+  private *generateActions(): Iterable<Action> {
+    for (const record of this._record.records()) {
+      switch (record.kind) {
+        case 'create':
+          yield {
+            id: this._id,
+            parent: 0,
+            kind: 'c',
+            path: record.path,
+            content: Buffer.from(record.content),
+          } as CreateFileAction;
+          break;
+        case 'overwrite':
+          yield {
+            id: this._id,
+            parent: 0,
+            kind: 'o',
+            path: record.path,
+            content: Buffer.from(record.content),
+          } as OverwriteFileAction;
+          break;
+        case 'rename':
+          yield {
+            id: this._id,
+            parent: 0,
+            kind: 'r',
+            path: record.from,
+            to: record.to,
+          } as RenameFileAction;
+          break;
+        case 'delete':
+          yield {
+            id: this._id,
+            parent: 0,
+            kind: 'd',
+            path: record.path,
+          } as DeleteFileAction;
+          break;
+      }
+    }
+  }
+
   get actions(): Action[] {
     // Create a list of all records until we hit our original backend. This is to support branches
     // that diverge from each others.
-    const allRecords = [...this._record.records()];
-
-    return clean(
-      allRecords
-        .map(record => {
-          switch (record.kind) {
-            case 'create':
-              return {
-                id: this._id,
-                parent: 0,
-                kind: 'c',
-                path: record.path,
-                content: Buffer.from(record.content),
-              } as CreateFileAction;
-            case 'overwrite':
-              return {
-                id: this._id,
-                parent: 0,
-                kind: 'o',
-                path: record.path,
-                content: Buffer.from(record.content),
-              } as OverwriteFileAction;
-            case 'rename':
-              return {
-                id: this._id,
-                parent: 0,
-                kind: 'r',
-                path: record.from,
-                to: record.to,
-              } as RenameFileAction;
-            case 'delete':
-              return {
-                id: this._id,
-                parent: 0,
-                kind: 'd',
-                path: record.path,
-              } as DeleteFileAction;
-
-            default:
-              return;
-          }
-        }),
-    );
+    return Array.from(this.generateActions());
   }
 }
 
@@ -427,7 +438,7 @@ export class HostCreateTree extends HostTree {
     super();
 
     const tempHost = new HostTree(host);
-    tempHost.visit(path => {
+    tempHost.visit((path) => {
       const content = tempHost.read(path);
       if (content) {
         this.create(path, content);
@@ -442,33 +453,32 @@ export class FilterHostTree extends HostTree {
     // cast to allow access
     const originalBackend = (tree as FilterHostTree)._backend;
 
-    const recurse: (base: Path) => Observable<void> = base => {
-      return originalBackend.list(base)
-        .pipe(
-          mergeMap(x => x),
-          map(path => join(base, path)),
-          concatMap(path => {
-            let isDirectory = false;
-            originalBackend.isDirectory(path).subscribe(val => isDirectory = val);
-            if (isDirectory) {
-              return recurse(path);
-            }
+    const recurse: (base: Path) => Observable<void> = (base) => {
+      return originalBackend.list(base).pipe(
+        mergeMap((x) => x),
+        map((path) => join(base, path)),
+        concatMap((path) => {
+          let isDirectory = false;
+          originalBackend.isDirectory(path).subscribe((val) => (isDirectory = val));
+          if (isDirectory) {
+            return recurse(path);
+          }
 
-            let isFile = false;
-            originalBackend.isFile(path).subscribe(val => isFile = val);
-            if (!isFile || !filter(path)) {
-              return EMPTY;
-            }
+          let isFile = false;
+          originalBackend.isFile(path).subscribe((val) => (isFile = val));
+          if (!isFile || !filter(path)) {
+            return EMPTY;
+          }
 
-            let content: ArrayBuffer | null = null;
-            originalBackend.read(path).subscribe(val => content = val);
-            if (!content) {
-              return EMPTY;
-            }
+          let content: ArrayBuffer | null = null;
+          originalBackend.read(path).subscribe((val) => (content = val));
+          if (!content) {
+            return EMPTY;
+          }
 
-            return newBackend.write(path, content as {} as virtualFs.FileBuffer);
-          }),
-        );
+          return newBackend.write(path, (content as {}) as virtualFs.FileBuffer);
+        }),
+      );
     };
 
     recurse(normalize('/')).subscribe();

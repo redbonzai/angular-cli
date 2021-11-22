@@ -1,12 +1,14 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import { statSync } from 'fs';
 
+/** @deprecated Since v11.0, unused by the Angular tooling */
 export function isFile(filePath: string): boolean {
   let stat;
   try {
@@ -21,7 +23,7 @@ export function isFile(filePath: string): boolean {
   return stat.isFile() || stat.isFIFO();
 }
 
-
+/** @deprecated Since v11.0, unused by the Angular tooling */
 export function isDirectory(filePath: string): boolean {
   let stat;
   try {

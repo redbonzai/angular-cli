@@ -1,17 +1,10 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-
-// TODO: remove this commented AJV require.
-// We don't actually require AJV, but there is a bug with NPM and peer dependencies that is
-// whose workaround is to depend on AJV.
-// See https://github.com/angular/angular-cli/issues/9691#issuecomment-367322703 for details.
-// We need to add a require here to satisfy the dependency checker.
-// require('ajv');
 
 export * from './transforms';
 
@@ -19,6 +12,7 @@ export {
   AssetPattern,
   AssetPatternClass as AssetPatternObject,
   Budget,
+  CrossOrigin,
   ExtraEntryPoint,
   ExtraEntryPointClass as ExtraEntryPointObject,
   FileReplacement,
@@ -30,27 +24,39 @@ export {
   SourceMapUnion,
   StylePreprocessorOptions,
   Type,
-} from './browser/schema';
+} from './builders/browser/schema';
 
 export {
   buildWebpackBrowser as executeBrowserBuilder,
   BrowserBuilderOutput,
-} from './browser';
+} from './builders/browser';
 
 export {
   serveWebpackBrowser as executeDevServerBuilder,
   DevServerBuilderOptions,
   DevServerBuilderOutput,
-} from './dev-server';
+} from './builders/dev-server';
+
+export {
+  execute as executeExtractI18nBuilder,
+  ExtractI18nBuilderOptions,
+} from './builders/extract-i18n';
 
 export {
   execute as executeKarmaBuilder,
   KarmaBuilderOptions,
   KarmaConfigOptions,
-} from './karma';
+} from './builders/karma';
+
+export {
+  execute as executeProtractorBuilder,
+  ProtractorBuilderOptions,
+} from './builders/protractor';
 
 export {
   execute as executeServerBuilder,
   ServerBuilderOptions,
   ServerBuilderOutput,
-} from './server';
+} from './builders/server';
+
+export { execute as executeNgPackagrBuilder, NgPackagrBuilderOptions } from './builders/ng-packagr';

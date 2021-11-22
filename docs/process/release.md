@@ -1,110 +1,79 @@
-> Hans Larsen (hansl@google.com)  
-> June 8th, 2018  
-
-
 # Setting Up Local Repository
 
 1. Clone the Angular-CLI repo. A local copy works just fine.
 1. Create an upstream remote:
-  ```bash
-  $ git remote add upstream https://github.com/angular/angular-cli.git
-  ```
+
+```bash
+$ git remote add upstream https://github.com/angular/angular-cli.git
+```
 
 # Caretaker
 
 The caretaker should triage issues, merge PR, and sheppard the release.
 
-Caretaker calendar can be found [here](https://calendar.google.com/calendar?cid=Z29vZ2xlLmNvbV9zZjlvODF0NGE4NzE5ZmtiMnBoZnA4MGk2Z0Bncm91cC5jYWxlbmRhci5nb29nbGUuY29t).
+Caretaker calendar can be found [here](https://calendar.google.com/calendar/embed?src=angular.io_jf53juok1lhpm84hv6bo6fmgbc%40group.calendar.google.com&ctz=America%2FLos_Angeles).
 
-## Triaging Issues
-TBD
+Each shift consists of two caretakers. The primary caretaker is responsible for
+merging PRs to master and patch whereas the secondary caretaker is responsible
+for the release. Primary-secondary pairs are as follows:
+
+| Primary | Secondary |
+| ------- | --------- |
+| Alan    | Doug      |
+| Charles | Keen      |
+| Filipe  | Joey      |
 
 ## Merging PRs
-TBD
 
-### Maintaining Patch Branches
-Everytime a PR is merged, commits need to be cherry-picked to an associated branch;
-* the latest patch branch (e.g. `1.2.x` or `1.3.x-rc.0`) should also be updated by cherry-picking all _applicable_
-  commits to it. `fix()`, `docs()`, `refactor()` and 
+The list of PRs which are currently ready to merge (approved with passing status checks) can
+be found with [this search](https://github.com/angular/angular-cli/pulls?q=is%3Apr+is%3Aopen+label%3A%22action%3A+merge%22+-is%3Adraft).
+This list should be checked daily and any ready PRs should be merged. For each PR, check the
+`target` label to understand where it should be merged to. You can find which branches a specific
+PR will be merged into with the `yarn ng-dev pr check-target-branches <pr>` command.
 
-Say the following PR is merged;
+When ready to merge a PR, run the following command:
 
-```text
-* fix(@angular/cli): fix path when doing stuff
-* refactor(@angular-devkit/core): replace Fizz with Buzz
-* feat(@angular-devkit/core): add new feature
-* fix(@angular-devkit/core): fix something related to new feature
-* refactor(@angular-devkit/core): move stuff to new feature
+```
+yarn ng-dev pr merge <pr>
 ```
 
-Only the first 2 commits should be cherry picked to the patch branch, as the last 3 are related to a new feature.
+### Maintaining LTS branches
+
+Releases that are under Long Term Support (LTS) are listed on [angular.io](https://angular.io/guide/releases#support-policy-and-schedule).
+
+Since there could be more than one LTS branch at any one time, PR authors who want to
+merge commits into LTS branches must open a pull request against the specific base branch they'd like to target.
+
+In general, cherry picks for LTS should only be done if it meets one of the criteria below:
+
+1. It addresses a critical security vulnerability.
+2. It fixes a breaking change in the external environment.
+   For example, this could happen if one of the dependencies is deleted from NPM.
+3. It fixes a legitimate failure on CI for a particular LTS branch.
 
 # Release
 
-## Before releasing
+Releasing is performed using Angular's unified release tooling. Each week, two releases are expected, `latest` and `next` on npm.
 
-Make sure the CI is green.
+When a release is transitioning from a prerelease to a stable release, the semver ranges for Angular dependencies within the packages' `package.json` files will need to be updated to remove the prerelease version segment.
+For example, `"@angular/compiler-cli": "^13.0.0 || ^13.0.0-next"` in a prerelease should become `"@angular/compiler-cli": "^13.0.0"` in the stable release.
+The current packages that require adjustment are:
 
-Consider if you need to update `packages/schematics/angular/utility/latest-versions.ts` to reflect changes in dependent versions.
+- `@angular-devkit/build-angular`: packages/angular_devkit/build_angular/package.json
+- `@ngtools/webpack`: packages/ngtools/webpack/package.json
 
-## Shepparding
-
-As commits are cherry-picked when PRs are merged, creating the release should be a matter of creating a tag.
-
-**Make sure you update the package versions in `packages/schematics/angular/utility/latest-versions.ts`.**
-
-```bash
-git commit -a -m 'release: vXX'
-git tag 'vXX'
-git push upstream && git push upstream --tags
-```
-
-### Publishing
-
-**This can ONLY be done by a Google employee.**
-
-**It is a good idea to wait for CI to be green on the patch branch and tag before doing the release.**
-
-Check out the patch tag (e.g. `v6.7.8`), then run: 
-```sh
-devkit-admin publish
-``` 
-
-Check out the minor tag (e.g. `v6.8.0-beta.0`), then run:
-```bash
-devkit-admin publish --tag next
-```
-
-### Microsite Publishing
-
-**This can ONLY be done by a Google employee.**
-
-**You will need firebase access to our cli-angular-io firebase site. If you don't have it, escalate.**
-
-Check out if changes were made to the microsite:
+To perform a release run the following and navigate the prompts:
 
 ```sh
-git log v8.0.0-beta.0..HEAD --oneline etc/cli.angular.io | wc -l
+yarn ng-dev release publish
 ```
 
-If the number is 0 you can ignore the rest of this section.
+## Changing shifts
 
-To publish, go to the `etc/cli.angular.io` directory and run `firebase deploy`. You might have to `firebase login` first. If you don't have the firebase CLI installed, you can install it using `npm install --global firebase-tools` (or use your package manager of choice).
-
-This is detailed in `etc/cli.angular.io/README.md`.
-
-### Release Notes
-
-`devkit-admin changelog` takes `from` and `to` arguments which are any valid git ref.
-For example, running the following command will output the release notes on stdout between v1.2.3 and 1.2.4:
-
-```bash
-devkit-admin changelog --from=v1.2.3 --to=v1.2.4
-``` 
-
-Copy paste the output (you can use `| pbcopy` on MacOS or `|xclip` on Linux) and create the release notes on github for the tag just
-released. If you have an API token for GitHub you can create a draft automatically by using the `--githubToken` flag.
-You just have then to confirm the draft.
-
-**Tags containing `beta` or `rc` should be marked as pre-release.**
-
+If you need to update the
+[caretaker calendar](https://calendar.google.com/calendar/embed?src=angular.io_jf53juok1lhpm84hv6bo6fmgbc%40group.calendar.google.com&ctz=America%2FLos_Angeles)
+to modify shifts, **make sure you are logged in as your @angular.io account** and
+click the "+ Google Calendar" button in the bottom right to add it to your Google
+Calendar account. You should then be able to find and modify events on
+calendar.google.com. The calendar is a part of the `angular.io` organization, so
+events can only be modified by users in the same organization.

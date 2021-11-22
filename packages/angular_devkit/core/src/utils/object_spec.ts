@@ -1,11 +1,12 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-// tslint:disable:no-any
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { deepCopy } from './object';
 
 describe('object', () => {
@@ -49,6 +50,12 @@ describe('object', () => {
       expect(result.b.circular.b.a).toBe(1);
       expect(result.b).not.toBe(data1);
       expect(result.b).toBe(result.b.circular.b);
+    });
+
+    it('works with null prototype', () => {
+      const data = Object.create(null);
+      data['a'] = 1;
+      expect(deepCopy(data)).toEqual(data);
     });
   });
 });

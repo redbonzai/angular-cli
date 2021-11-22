@@ -1,26 +1,23 @@
 import { stripIndent } from 'common-tags';
 import { getGlobalVariable } from '../../utils/env';
 import { expectFileToMatch, writeFile } from '../../utils/fs';
-import { ng, npm } from '../../utils/process';
+import { installWorkspacePackages } from '../../utils/packages';
+import { ng } from '../../utils/process';
 import { updateJsonFile } from '../../utils/project';
 import { readNgVersion } from '../../utils/version';
 
-export default function() {
-  // Skip this test in Angular 2/4.
-  if (getGlobalVariable('argv').ng2 || getGlobalVariable('argv').ng4) {
-    return Promise.resolve();
-  }
-
+export default function () {
   let platformServerVersion = readNgVersion();
-  let httpVersion = readNgVersion();
 
   if (getGlobalVariable('argv')['ng-snapshots']) {
-    platformServerVersion = 'github:angular/platform-server-builds';
+    platformServerVersion = require('../../ng-snapshot/package.json').dependencies[
+      '@angular/platform-server'
+    ];
   }
 
   return Promise.resolve()
     .then(() =>
-      updateJsonFile('angular.json', workspaceJson => {
+      updateJsonFile('angular.json', (workspaceJson) => {
         const appArchitect = workspaceJson.projects['test-project'].architect;
         appArchitect['server'] = {
           builder: '@angular-devkit/build-angular:server',
@@ -33,7 +30,7 @@ export default function() {
         appArchitect['app-shell'] = {
           builder: '@angular-devkit/build-angular:app-shell',
           options: {
-            browserTarget: 'test-project:build:production',
+            browserTarget: 'test-project:build',
             serverTarget: 'test-project:server',
             route: '/shell',
           },
@@ -52,6 +49,12 @@ export default function() {
           "module": "commonjs",
           "types": []
         },
+        "files": [
+          "src/main.server.ts"
+        ],
+        "include": [
+          "src/**/*.d.ts"
+        ],
         "angularCompilerOptions": {
           "entryModule": "src/app/app.server.module#AppServerModule"
         }
@@ -72,6 +75,7 @@ export default function() {
       }
 
       export { AppServerModule } from './app/app.server.module';
+      export { renderModule } from '@angular/platform-server';
     `,
       ),
     )
@@ -154,10 +158,10 @@ export default function() {
       ),
     )
     .then(() =>
-      updateJsonFile('package.json', packageJson => {
+      updateJsonFile('package.json', (packageJson) => {
         const dependencies = packageJson['dependencies'];
         dependencies['@angular/platform-server'] = platformServerVersion;
-      }).then(() => npm('install')),
+      }).then(() => installWorkspacePackages()),
     )
     .then(() => ng('run', 'test-project:app-shell'))
     .then(() => expectFileToMatch('dist/test-project/index.html', /shell Works!/));

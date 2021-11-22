@@ -1,18 +1,14 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-import {
-  JsonAstKeyValue,
-  JsonAstNode,
-  JsonAstObject,
-  JsonParseMode,
-  JsonValue,
-  parseJsonAst,
-} from '../../json';
+
+import { JsonParseMode, parseJsonAst } from '../../json/parser';
+import { JsonAstKeyValue, JsonAstNode, JsonAstObject } from '../../json/parser_ast';
+import { JsonValue } from '../../json/utils';
 import {
   DefinitionCollectionListener,
   ProjectDefinition,
@@ -49,7 +45,7 @@ export async function readJsonWorkspace(
   }
 
   // Version check
-  const versionNode = ast.properties.find(pair => pair.key.value === 'version');
+  const versionNode = ast.properties.find((pair) => pair.key.value === 'version');
   if (!versionNode) {
     throw new Error('Unknown format - version specifier not found.');
   }
@@ -213,17 +209,35 @@ function parseProject(
   }
 
   let collectionListener: DefinitionCollectionListener<TargetDefinition> | undefined;
-  if (context.trackChanges && targetsNode) {
-    const parentNode = targetsNode;
-    collectionListener = (name, action, newValue) => {
-      jsonMetadata.addChange(
-        action,
-        `/projects/${projectName}/targets/${escapeKey(name)}`,
-        parentNode,
-        newValue,
-        'target',
-      );
-    };
+  if (context.trackChanges) {
+    if (targetsNode) {
+      const parentNode = targetsNode;
+      collectionListener = (name, action, newValue) => {
+        jsonMetadata.addChange(
+          action,
+          `/projects/${projectName}/targets/${escapeKey(name)}`,
+          parentNode,
+          newValue,
+          'target',
+        );
+      };
+    } else {
+      let added = false;
+      collectionListener = (_name, action, _new, _old, collection) => {
+        if (added || action !== 'add') {
+          return;
+        }
+
+        jsonMetadata.addChange(
+          'add',
+          `/projects/${projectName}/targets`,
+          projectNode,
+          collection,
+          'targetcollection',
+        );
+        added = true;
+      };
+    }
   }
 
   const base = {
@@ -276,7 +290,7 @@ function parseTargetsObject(
     const name = key.value;
     if (context.trackChanges) {
       targets[name] = createVirtualAstObject<TargetDefinition>(value, {
-        include: [ 'builder', 'options', 'configurations' ],
+        include: ['builder', 'options', 'configurations', 'defaultConfiguration'],
         listener(op, path, node, value) {
           jsonMetadata.addChange(
             op,

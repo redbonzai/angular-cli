@@ -1,23 +1,21 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
 
-// tslint:disable:no-global-tslint-disable no-any
-import { analytics, logging, strings, tags, terminal } from '@angular-devkit/core';
-import * as path from 'path';
-import { getWorkspace } from '../utilities/config';
+import { analytics, logging, strings, tags } from '@angular-devkit/core';
+import { colors } from '../utilities/color';
+import { AngularWorkspace } from '../utilities/config';
 import {
   Arguments,
   CommandContext,
   CommandDescription,
   CommandDescriptionMap,
   CommandScope,
-  CommandWorkspace,
-  Option, SubCommandDescription,
+  Option,
 } from './interface';
 
 export interface BaseCommandOptions {
@@ -25,9 +23,10 @@ export interface BaseCommandOptions {
 }
 
 export abstract class Command<T extends BaseCommandOptions = BaseCommandOptions> {
-  public allowMissingWorkspace = false;
-  public workspace: CommandWorkspace;
-  public analytics: analytics.Analytics;
+  protected allowMissingWorkspace = false;
+  protected useReportAnalytics = true;
+  readonly workspace?: AngularWorkspace;
+  readonly analytics: analytics.Analytics;
 
   protected static commandMap: () => Promise<CommandDescriptionMap>;
   static setCommandMap(map: () => Promise<CommandDescriptionMap>) {
@@ -35,7 +34,7 @@ export abstract class Command<T extends BaseCommandOptions = BaseCommandOptions>
   }
 
   constructor(
-    context: CommandContext,
+    protected readonly context: CommandContext,
     public readonly description: CommandDescription,
     protected readonly logger: logging.Logger,
   ) {
@@ -43,19 +42,19 @@ export abstract class Command<T extends BaseCommandOptions = BaseCommandOptions>
     this.analytics = context.analytics || new analytics.NoopAnalytics();
   }
 
-  async initialize(options: T & Arguments): Promise<void> {
-    return;
-  }
+  async initialize(options: T & Arguments): Promise<number | void> {}
 
-  async printHelp(options: T & Arguments): Promise<number> {
+  async printHelp(): Promise<number> {
     await this.printHelpUsage();
     await this.printHelpOptions();
 
     return 0;
   }
 
-  async printJsonHelp(_options: T & Arguments): Promise<number> {
-    this.logger.info(JSON.stringify(this.description));
+  async printJsonHelp(): Promise<number> {
+    const replacer = (key: string, value: string) =>
+      key === 'name' ? strings.dasherize(value) : value;
+    this.logger.info(JSON.stringify(this.description, replacer, 2));
 
     return 0;
   }
@@ -64,37 +63,28 @@ export abstract class Command<T extends BaseCommandOptions = BaseCommandOptions>
     this.logger.info(this.description.description);
 
     const name = this.description.name;
-    const args = this.description.options.filter(x => x.positional !== undefined);
-    const opts = this.description.options.filter(x => x.positional === undefined);
+    const args = this.description.options.filter((x) => x.positional !== undefined);
+    const opts = this.description.options.filter((x) => x.positional === undefined);
 
-    const argDisplay = args && args.length > 0
-      ? ' ' + args.map(a => `<${a.name}>`).join(' ')
-      : '';
-    const optionsDisplay = opts && opts.length > 0
-      ? ` [options]`
-      : ``;
+    const argDisplay =
+      args && args.length > 0 ? ' ' + args.map((a) => `<${a.name}>`).join(' ') : '';
+    const optionsDisplay = opts && opts.length > 0 ? ` [options]` : ``;
 
     this.logger.info(`usage: ng ${name}${argDisplay}${optionsDisplay}`);
     this.logger.info('');
   }
 
-  protected async printHelpSubcommand(subcommand: SubCommandDescription) {
-    this.logger.info(subcommand.description);
-
-    await this.printHelpOptions(subcommand.options);
-  }
-
   protected async printHelpOptions(options: Option[] = this.description.options) {
-    const args = options.filter(opt => opt.positional !== undefined);
-    const opts = options.filter(opt => opt.positional === undefined);
+    const args = options.filter((opt) => opt.positional !== undefined);
+    const opts = options.filter((opt) => opt.positional === undefined);
 
     const formatDescription = (description: string) =>
       `    ${description.replace(/\n/g, '\n    ')}`;
 
     if (args.length > 0) {
       this.logger.info(`arguments:`);
-      args.forEach(o => {
-        this.logger.info(`  ${terminal.cyan(o.name)}`);
+      args.forEach((o) => {
+        this.logger.info(`  ${colors.cyan(o.name)}`);
         if (o.description) {
           this.logger.info(formatDescription(o.description));
         }
@@ -106,13 +96,14 @@ export abstract class Command<T extends BaseCommandOptions = BaseCommandOptions>
       }
       this.logger.info(`options:`);
       opts
-        .filter(o => !o.hidden)
+        .filter((o) => !o.hidden)
         .sort((a, b) => a.name.localeCompare(b.name))
-        .forEach(o => {
-          const aliases = o.aliases && o.aliases.length > 0
-            ? '(' + o.aliases.map(a => `-${a}`).join(' ') + ')'
-            : '';
-          this.logger.info(`  ${terminal.cyan('--' + strings.dasherize(o.name))} ${aliases}`);
+        .forEach((o) => {
+          const aliases =
+            o.aliases && o.aliases.length > 0
+              ? '(' + o.aliases.map((a) => `-${a}`).join(' ') + ')'
+              : '';
+          this.logger.info(`  ${colors.cyan('--' + strings.dasherize(o.name))} ${aliases}`);
           if (o.description) {
             this.logger.info(formatDescription(o.description));
           }
@@ -123,23 +114,22 @@ export abstract class Command<T extends BaseCommandOptions = BaseCommandOptions>
   async validateScope(scope?: CommandScope): Promise<void> {
     switch (scope === undefined ? this.description.scope : scope) {
       case CommandScope.OutProject:
-        if (this.workspace.configFile) {
+        if (this.workspace) {
           this.logger.fatal(tags.oneLine`
             The ${this.description.name} command requires to be run outside of a project, but a
-            project definition was found at "${path.join(
-              this.workspace.root,
-              this.workspace.configFile,
-            )}".
+            project definition was found at "${this.workspace.filePath}".
           `);
+          // eslint-disable-next-line no-throw-literal
           throw 1;
         }
         break;
       case CommandScope.InProject:
-        if (!this.workspace.configFile || getWorkspace('local') === null) {
+        if (!this.workspace) {
           this.logger.fatal(tags.oneLine`
             The ${this.description.name} command requires to be run in an Angular project, but a
             project definition could not be found.
           `);
+          // eslint-disable-next-line no-throw-literal
           throw 1;
         }
         break;
@@ -151,7 +141,7 @@ export abstract class Command<T extends BaseCommandOptions = BaseCommandOptions>
 
   async reportAnalytics(
     paths: string[],
-    options: T & Arguments,
+    options: Arguments,
     dimensions: (boolean | number | string)[] = [],
     metrics: (boolean | number | string)[] = [],
   ): Promise<void> {
@@ -164,25 +154,30 @@ export abstract class Command<T extends BaseCommandOptions = BaseCommandOptions>
       }
     }
 
-    this.analytics.pageview('/command/' + paths.join('/'), { dimensions });
+    this.analytics.pageview('/command/' + paths.join('/'), { dimensions, metrics });
   }
 
-  abstract async run(options: T & Arguments): Promise<number | void>;
+  abstract run(options: T & Arguments): Promise<number | void>;
 
   async validateAndRun(options: T & Arguments): Promise<number | void> {
     if (!(options.help === true || options.help === 'json' || options.help === 'JSON')) {
       await this.validateScope();
     }
-    await this.initialize(options);
+    let result = await this.initialize(options);
+    if (typeof result === 'number' && result !== 0) {
+      return result;
+    }
 
     if (options.help === true) {
-      return this.printHelp(options);
+      return this.printHelp();
     } else if (options.help === 'json' || options.help === 'JSON') {
-      return this.printJsonHelp(options);
+      return this.printJsonHelp();
     } else {
       const startTime = +new Date();
-      await this.reportAnalytics([this.description.name], options);
-      const result = await this.run(options);
+      if (this.useReportAnalytics) {
+        await this.reportAnalytics([this.description.name], options);
+      }
+      result = await this.run(options);
       const endTime = +new Date();
 
       this.analytics.timing(this.description.name, 'duration', endTime - startTime);

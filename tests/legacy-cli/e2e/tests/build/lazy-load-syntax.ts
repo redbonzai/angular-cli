@@ -1,19 +1,16 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-import { getGlobalVariable } from '../../utils/env';
+
 import { appendToFile, prependToFile, readFile, replaceInFile, writeFile } from '../../utils/fs';
 import { ng } from '../../utils/process';
 import { updateJsonFile } from '../../utils/project';
-import { expectToFail } from '../../utils/utils';
 
 export default async function () {
-  const argv = getGlobalVariable('argv');
-  const ivyProject = argv['ivy'];
   const projectName = 'test-project';
   const appRoutingModulePath = 'src/app/app-routing.module.ts';
 
@@ -59,9 +56,9 @@ export default async function () {
     import { browser, logging, element, by } from 'protractor';
 
     describe('workspace-project App', () => {
-      it('should display lazy route', () => {
-        browser.get(browser.baseUrl + '/lazy');
-        expect(element(by.css('app-lazy-comp p')).getText()).toEqual('lazy-comp works!');
+      it('should display lazy route', async () => {
+        await browser.get(browser.baseUrl + '/lazy');
+        expect(await element(by.css('app-lazy-comp p')).getText()).toEqual('lazy-comp works!');
       });
 
       afterEach(async () => {
@@ -78,23 +75,14 @@ export default async function () {
   // This way we can use `ng e2e` to test JIT and `ng e2e --prod` to test AOT.
   await updateJsonFile('angular.json', json => {
     const buildTarget = json['projects'][projectName]['architect']['build'];
-    buildTarget['options']['aot'] = false;
-    buildTarget['configurations']['production'] = { aot: true };
+    buildTarget['options']['aot'] = true;
+    buildTarget['configurations']['development']['aot'] = false;
   });
-
-  // Test string import.
-  // Both Ivy and View Engine should support it.
-  await replaceLoadChildren(`'./lazy/lazy.module#LazyModule'`);
-  await ng('e2e');
-  await ng('e2e', '--prod');
 
   // Test `import()` style lazy load.
   // Both Ivy and View Engine should support it.
   await replaceLoadChildren(`() => import('./lazy/lazy.module').then(m => m.LazyModule)`);
 
-  // TODO: remove cast after https://github.com/angular/angular/pull/29832 is released.
-  await replaceInFile(appRoutingModulePath, '];', '] as Routes;');
-
   await ng('e2e');
-  await ng('e2e', '--prod');
+  await ng('e2e', '--configuration=production');
 }

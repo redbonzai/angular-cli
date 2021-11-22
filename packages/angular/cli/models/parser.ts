@@ -1,14 +1,13 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
- *
  */
+
 import { BaseException, logging, strings } from '@angular-devkit/core';
 import { Arguments, Option, OptionType, Value } from './interface';
-
 
 export class ParseArgumentException extends BaseException {
   constructor(
@@ -16,10 +15,9 @@ export class ParseArgumentException extends BaseException {
     public readonly parsed: Arguments,
     public readonly ignored: string[],
   ) {
-    super(`One or more errors occured while parsing arguments:\n  ${comments.join('\n  ')}`);
+    super(`One or more errors occurred while parsing arguments:\n  ${comments.join('\n  ')}`);
   }
 }
-
 
 function _coerceType(str: string | undefined, type: OptionType, v?: Value): Value | undefined {
   switch (type) {
@@ -31,8 +29,8 @@ function _coerceType(str: string | undefined, type: OptionType, v?: Value): Valu
       return _coerceType(str, OptionType.Boolean, v) !== undefined
         ? _coerceType(str, OptionType.Boolean, v)
         : _coerceType(str, OptionType.Number, v) !== undefined
-          ? _coerceType(str, OptionType.Number, v)
-          : _coerceType(str, OptionType.String, v);
+        ? _coerceType(str, OptionType.Number, v)
+        : _coerceType(str, OptionType.String, v);
 
     case OptionType.String:
       return str || '';
@@ -66,8 +64,8 @@ function _coerceType(str: string | undefined, type: OptionType, v?: Value): Valu
       return Array.isArray(v)
         ? v.concat(str || '')
         : v === undefined
-          ? [str || '']
-          : [v + '', str || ''];
+        ? [str || '']
+        : [v + '', str || ''];
 
     default:
       return undefined;
@@ -84,10 +82,8 @@ function _coerce(str: string | undefined, o: Option | null, v?: Value): Value | 
     // enum. If there's no enum, just return the first one that matches.
     for (const type of types) {
       const maybeResult = _coerceType(str, type, v);
-      if (maybeResult !== undefined) {
-        if (!o.enum || o.enum.includes(maybeResult)) {
-          return maybeResult;
-        }
+      if (maybeResult !== undefined && (!o.enum || o.enum.includes(maybeResult))) {
+        return maybeResult;
       }
     }
 
@@ -95,18 +91,15 @@ function _coerce(str: string | undefined, o: Option | null, v?: Value): Value | 
   }
 }
 
-
 function _getOptionFromName(name: string, options: Option[]): Option | undefined {
-  const camelName = /(-|_)/.test(name)
-    ? strings.camelize(name)
-    : name;
+  const camelName = /(-|_)/.test(name) ? strings.camelize(name) : name;
 
   for (const option of options) {
     if (option.name === name || option.name === camelName) {
       return option;
     }
 
-    if (option.aliases.some(x => x === name || x === camelName)) {
+    if (option.aliases.some((x) => x === name || x === camelName)) {
       return option;
     }
   }
@@ -123,14 +116,21 @@ function _removeLeadingDashes(key: string): string {
 function _assignOption(
   arg: string,
   nextArg: string | undefined,
-  { options, parsedOptions, leftovers, ignored, errors, warnings }: {
-    options: Option[],
-    parsedOptions: Arguments,
-    positionals: string[],
-    leftovers: string[],
-    ignored: string[],
-    errors: string[],
-    warnings: string[],
+  {
+    options,
+    parsedOptions,
+    leftovers,
+    ignored,
+    errors,
+    warnings,
+  }: {
+    options: Option[];
+    parsedOptions: Arguments;
+    positionals: string[];
+    leftovers: string[];
+    ignored: string[];
+    errors: string[];
+    warnings: string[];
   },
 ) {
   const from = arg.startsWith('--') ? 2 : 1;
@@ -159,11 +159,9 @@ function _assignOption(
         value = nextArg;
         let shouldShift = true;
 
-        if (value && value.startsWith('-')) {
+        if (value && value.startsWith('-') && _coerce(undefined, maybeOption) !== undefined) {
           // Verify if not having a value results in a correct parse, if so don't shift.
-          if (_coerce(undefined, maybeOption) !== undefined) {
-            shouldShift = false;
-          }
+          shouldShift = false;
         }
 
         // Only absorb it if it leads to a better value.
@@ -194,25 +192,20 @@ function _assignOption(
     const v = _coerce(value, option, parsedOptions[option.name]);
     if (v !== undefined) {
       if (parsedOptions[option.name] !== v) {
-        if (parsedOptions[option.name] !== undefined) {
+        if (parsedOptions[option.name] !== undefined && option.type !== OptionType.Array) {
           warnings.push(
-            `Option ${JSON.stringify(option.name)} was already specified with value `
-            + `${JSON.stringify(parsedOptions[option.name])}. The new value ${JSON.stringify(v)} `
-            + `will override it.`,
+            `Option ${JSON.stringify(option.name)} was already specified with value ` +
+              `${JSON.stringify(parsedOptions[option.name])}. The new value ${JSON.stringify(v)} ` +
+              `will override it.`,
           );
         }
 
         parsedOptions[option.name] = v;
-
-        if (option.deprecated !== undefined && option.deprecated !== false) {
-          warnings.push(`Option ${JSON.stringify(option.name)} is deprecated${
-            typeof option.deprecated == 'string' ? ': ' + option.deprecated : '.'}`);
-        }
       }
     } else {
       let error = `Argument ${key} could not be parsed using value ${JSON.stringify(value)}.`;
       if (option.enum) {
-        error += ` Valid values are: ${option.enum.map(x => JSON.stringify(x)).join(', ')}.`;
+        error += ` Valid values are: ${option.enum.map((x) => JSON.stringify(x)).join(', ')}.`;
       } else {
         error += `Valid type(s) is: ${(option.types || [option.type]).join(', ')}`;
       }
@@ -220,11 +213,17 @@ function _assignOption(
       errors.push(error);
       ignored.push(arg);
     }
+
+    if (/^[a-z]+[A-Z]/.test(key)) {
+      warnings.push(
+        'Support for camel case arguments has been deprecated and will be removed in a future major version.\n' +
+          `Use '--${strings.dasherize(key)}' instead of '--${key}'.`,
+      );
+    }
   }
 
   return consumedNextArg;
 }
-
 
 /**
  * Parse the arguments in a consistent way, but without having any option definition. This tries
@@ -263,17 +262,18 @@ export function parseFreeFormArguments(args: string[]): Arguments {
         parsedOptions[name] = v;
       }
     } else if (arg.startsWith('-')) {
-      arg.split('').forEach(x => parsedOptions[x] = true);
+      arg.split('').forEach((x) => (parsedOptions[x] = true));
     } else {
       leftovers.push(arg);
     }
   }
 
-  parsedOptions['--'] = leftovers;
+  if (leftovers.length) {
+    parsedOptions['--'] = leftovers;
+  }
 
   return parsedOptions;
 }
-
 
 /**
  * Parse the arguments in a consistent way, from a list of standardized options.
@@ -357,7 +357,7 @@ export function parseArguments(
   //   simpler.
   if (positionals.length > 0) {
     let pos = 0;
-    for (let i = 0; i < positionals.length;) {
+    for (let i = 0; i < positionals.length; ) {
       let found = false;
       let incrementPos = false;
       let incrementI = true;
@@ -394,7 +394,7 @@ export function parseArguments(
   }
 
   if (warnings.length > 0 && logger) {
-    warnings.forEach(message => logger.warn(message));
+    warnings.forEach((message) => logger.warn(message));
   }
 
   if (errors.length > 0) {

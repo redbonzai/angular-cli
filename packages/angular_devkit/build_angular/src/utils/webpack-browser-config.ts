@@ -1,201 +1,211 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import { BuilderContext } from '@angular-devkit/architect';
-import {
-  experimental,
-  getSystemPath,
-  logging,
-  normalize,
-  resolve,
-  schema,
-  virtualFs,
-} from '@angular-devkit/core';
-import { NodeJsSyncHost } from '@angular-devkit/core/node';
-import * as fs from 'fs';
+import { getSystemPath, json, logging, normalize, resolve } from '@angular-devkit/core';
 import * as path from 'path';
-import * as webpack from 'webpack';
-import { WebpackConfigOptions } from '../angular-cli-files/models/build-options';
-import { getEsVersionForFileName } from '../angular-cli-files/models/webpack-configs';
-import { readTsconfig } from '../angular-cli-files/utilities/read-tsconfig';
-import { Schema as BrowserBuilderSchema } from '../browser/schema';
+import { ScriptTarget } from 'typescript';
+import { Configuration, javascript } from 'webpack';
+import { merge as webpackMerge } from 'webpack-merge';
+import { Schema as BrowserBuilderSchema } from '../builders/browser/schema';
 import { NormalizedBrowserBuilderSchema, defaultProgress, normalizeBrowserSchema } from '../utils';
-import { BuildBrowserFeatures } from './build-browser-features';
+import { WebpackConfigOptions } from '../utils/build-options';
+import { readTsconfig } from '../utils/read-tsconfig';
+import { BuilderWatchPlugin, BuilderWatcherFactory } from '../webpack/plugins/builder-watch-plugin';
+import { I18nOptions, configureI18nBuild } from './i18n-options';
 
-const SpeedMeasurePlugin = require('speed-measure-webpack-plugin');
-const webpackMerge = require('webpack-merge');
+export type BrowserWebpackConfigOptions = WebpackConfigOptions<NormalizedBrowserBuilderSchema>;
 
-type BrowserWebpackConfigOptions = WebpackConfigOptions<NormalizedBrowserBuilderSchema>;
+export type WebpackPartialGenerator = (
+  configurationOptions: BrowserWebpackConfigOptions,
+) => (Promise<Configuration> | Configuration)[];
 
 export async function generateWebpackConfig(
-  context: BuilderContext,
   workspaceRoot: string,
   projectRoot: string,
   sourceRoot: string | undefined,
+  projectName: string,
   options: NormalizedBrowserBuilderSchema,
-  webpackPartialGenerator: (wco: BrowserWebpackConfigOptions) => webpack.Configuration[],
+  webpackPartialGenerator: WebpackPartialGenerator,
   logger: logging.LoggerApi,
-): Promise<webpack.Configuration[]> {
+  extraBuildOptions: Partial<NormalizedBrowserBuilderSchema>,
+): Promise<Configuration> {
   // Ensure Build Optimizer is only used with AOT.
   if (options.buildOptimizer && !options.aot) {
     throw new Error(`The 'buildOptimizer' option cannot be used without 'aot'.`);
   }
 
   const tsConfigPath = path.resolve(workspaceRoot, options.tsConfig);
-  const tsConfig = readTsconfig(tsConfigPath);
+  const tsConfig = await readTsconfig(tsConfigPath);
 
-  // tslint:disable-next-line:no-implicit-dependencies
   const ts = await import('typescript');
-
-  // At the moment, only the browser builder supports differential loading
-  // However this config generation is used by multiple builders such as dev-server
   const scriptTarget = tsConfig.options.target || ts.ScriptTarget.ES5;
-  const buildBrowserFeatures = new BuildBrowserFeatures(projectRoot, scriptTarget);
-  const differentialLoading = context.builder.builderName === 'browser'
-    && !options.watch
-    && buildBrowserFeatures.isDifferentialLoadingNeeded();
 
-  const scriptTargets = [scriptTarget];
-
-  if (differentialLoading) {
-    scriptTargets.unshift(ts.ScriptTarget.ES5);
-  }
-
-  // For differential loading, we can have several targets
-  return scriptTargets.map(scriptTarget => {
-    let buildOptions: NormalizedBrowserBuilderSchema = { ...options };
-    if (differentialLoading) {
-      // For differential loading, the builder needs to created the index.html by itself
-      // without using a webpack plugin.
-      buildOptions = {
-        ...options,
-        es5BrowserSupport: undefined,
-        esVersionInFileName: true,
-        scriptTargetOverride: scriptTarget,
-      };
-    }
-
-    const supportES2015
-      = scriptTarget !== ts.ScriptTarget.ES3 && scriptTarget !== ts.ScriptTarget.ES5;
-
-    const wco: BrowserWebpackConfigOptions = {
-      root: workspaceRoot,
-      logger: logger.createChild('webpackConfigOptions'),
-      projectRoot,
-      sourceRoot,
-      buildOptions,
-      tsConfig,
-      tsConfigPath,
-      supportES2015,
-    };
-
-    wco.buildOptions.progress = defaultProgress(wco.buildOptions.progress);
-
-    const partials = webpackPartialGenerator(wco);
-    const webpackConfig = webpackMerge(partials) as webpack.Configuration;
-
-    if (supportES2015) {
-      if (!webpackConfig.resolve) {
-        webpackConfig.resolve = {};
-      }
-      if (!webpackConfig.resolve.alias) {
-        webpackConfig.resolve.alias = {};
-      }
-      webpackConfig.resolve.alias['zone.js/dist/zone'] = 'zone.js/dist/zone-evergreen';
-    }
-
-    if (options.profile || process.env['NG_BUILD_PROFILING']) {
-      const esVersionInFileName = getEsVersionForFileName(
-        wco.buildOptions.scriptTargetOverride,
-        wco.buildOptions.esVersionInFileName,
-      );
-
-      const smp = new SpeedMeasurePlugin({
-        outputFormat: 'json',
-        outputTarget: path.resolve(
-          workspaceRoot,
-          `speed-measure-plugin${esVersionInFileName}.json`,
-        ),
-      });
-
-      return smp.wrap(webpackConfig);
-    }
-
-    return webpackConfig;
-  });
-}
-
-
-export async function generateBrowserWebpackConfigFromWorkspace(
-  options: BrowserBuilderSchema,
-  context: BuilderContext,
-  projectName: string,
-  workspace: experimental.workspace.Workspace,
-  host: virtualFs.Host<fs.Stats>,
-  webpackPartialGenerator: (wco: BrowserWebpackConfigOptions) => webpack.Configuration[],
-  logger: logging.LoggerApi,
-): Promise<webpack.Configuration[]> {
-  // TODO: Use a better interface for workspace access.
-  const projectRoot = resolve(workspace.root, normalize(workspace.getProject(projectName).root));
-  const projectSourceRoot = workspace.getProject(projectName).sourceRoot;
-  const sourceRoot = projectSourceRoot
-    ? resolve(workspace.root, normalize(projectSourceRoot))
-    : undefined;
-
-  const normalizedOptions = normalizeBrowserSchema(
-    host,
-    workspace.root,
+  const buildOptions: NormalizedBrowserBuilderSchema = { ...options, ...extraBuildOptions };
+  const wco: BrowserWebpackConfigOptions = {
+    root: workspaceRoot,
+    logger: logger.createChild('webpackConfigOptions'),
     projectRoot,
     sourceRoot,
-    options,
-  );
+    buildOptions,
+    tsConfig,
+    tsConfigPath,
+    projectName,
+    scriptTarget,
+  };
 
-  return generateWebpackConfig(
-    context,
-    getSystemPath(workspace.root),
-    getSystemPath(projectRoot),
-    sourceRoot && getSystemPath(sourceRoot),
-    normalizedOptions,
-    webpackPartialGenerator,
-    logger,
-  );
+  wco.buildOptions.progress = defaultProgress(wco.buildOptions.progress);
+
+  const partials = await Promise.all(webpackPartialGenerator(wco));
+  const webpackConfig = webpackMerge(partials);
+
+  return webpackConfig;
 }
 
+export async function generateI18nBrowserWebpackConfigFromContext(
+  options: BrowserBuilderSchema,
+  context: BuilderContext,
+  webpackPartialGenerator: WebpackPartialGenerator,
+  extraBuildOptions: Partial<NormalizedBrowserBuilderSchema> = {},
+): Promise<{
+  config: Configuration;
+  projectRoot: string;
+  projectSourceRoot?: string;
+  i18n: I18nOptions;
+  target: ScriptTarget;
+}> {
+  const { buildOptions, i18n } = await configureI18nBuild(context, options);
+  let target = ScriptTarget.ES5;
+  const result = await generateBrowserWebpackConfigFromContext(
+    buildOptions,
+    context,
+    (wco) => {
+      target = wco.scriptTarget;
 
+      return webpackPartialGenerator(wco);
+    },
+    extraBuildOptions,
+  );
+  const config = result.config;
+
+  if (i18n.shouldInline) {
+    // Remove localize "polyfill" if in AOT mode
+    if (buildOptions.aot) {
+      if (!config.resolve) {
+        config.resolve = {};
+      }
+      if (Array.isArray(config.resolve.alias)) {
+        config.resolve.alias.push({
+          name: '@angular/localize/init',
+          alias: false,
+        });
+      } else {
+        if (!config.resolve.alias) {
+          config.resolve.alias = {};
+        }
+        config.resolve.alias['@angular/localize/init'] = false;
+      }
+    }
+
+    // Update file hashes to include translation file content
+    const i18nHash = Object.values(i18n.locales).reduce(
+      (data, locale) => data + locale.files.map((file) => file.integrity || '').join('|'),
+      '',
+    );
+
+    config.plugins ??= [];
+    config.plugins.push({
+      apply(compiler) {
+        compiler.hooks.compilation.tap('build-angular', (compilation) => {
+          javascript.JavascriptModulesPlugin.getCompilationHooks(compilation).chunkHash.tap(
+            'build-angular',
+            (_, hash) => {
+              hash.update('$localize' + i18nHash);
+            },
+          );
+        });
+      },
+    });
+  }
+
+  return { ...result, i18n, target };
+}
 export async function generateBrowserWebpackConfigFromContext(
   options: BrowserBuilderSchema,
   context: BuilderContext,
-  webpackPartialGenerator: (wco: BrowserWebpackConfigOptions) => webpack.Configuration[],
-  host: virtualFs.Host<fs.Stats> = new NodeJsSyncHost(),
-): Promise<{ workspace: experimental.workspace.Workspace, config: webpack.Configuration[] }> {
-  const registry = new schema.CoreSchemaRegistry();
-  registry.addPostTransform(schema.transforms.addUndefinedDefaults);
-
-  const workspace = await experimental.workspace.Workspace.fromPath(
-    host,
-    normalize(context.workspaceRoot),
-    registry,
-  );
-
-  const projectName = context.target ? context.target.project : workspace.getDefaultProjectName();
-
+  webpackPartialGenerator: WebpackPartialGenerator,
+  extraBuildOptions: Partial<NormalizedBrowserBuilderSchema> = {},
+): Promise<{ config: Configuration; projectRoot: string; projectSourceRoot?: string }> {
+  const projectName = context.target && context.target.project;
   if (!projectName) {
-    throw new Error('Must either have a target from the context or a default project.');
+    throw new Error('The builder requires a target.');
   }
 
-  const config = await generateBrowserWebpackConfigFromWorkspace(
+  const workspaceRoot = normalize(context.workspaceRoot);
+  const projectMetadata = await context.getProjectMetadata(projectName);
+  const projectRoot = resolve(workspaceRoot, normalize((projectMetadata.root as string) || ''));
+  const projectSourceRoot = projectMetadata.sourceRoot as string | undefined;
+  const sourceRoot = projectSourceRoot
+    ? resolve(workspaceRoot, normalize(projectSourceRoot))
+    : undefined;
+
+  const normalizedOptions = normalizeBrowserSchema(
+    workspaceRoot,
+    projectRoot,
+    sourceRoot,
     options,
-    context,
-    projectName,
-    workspace,
-    host,
-    webpackPartialGenerator,
-    context.logger,
+    projectMetadata,
   );
 
-  return { workspace, config };
+  const config = await generateWebpackConfig(
+    getSystemPath(workspaceRoot),
+    getSystemPath(projectRoot),
+    sourceRoot && getSystemPath(sourceRoot),
+    projectName,
+    normalizedOptions,
+    webpackPartialGenerator,
+    context.logger,
+    extraBuildOptions,
+  );
+
+  // If builder watch support is present in the context, add watch plugin
+  // This is internal only and currently only used for testing
+  const watcherFactory = (
+    context as {
+      watcherFactory?: BuilderWatcherFactory;
+    }
+  ).watcherFactory;
+  if (watcherFactory) {
+    if (!config.plugins) {
+      config.plugins = [];
+    }
+    config.plugins.push(new BuilderWatchPlugin(watcherFactory));
+  }
+
+  return {
+    config,
+    projectRoot: getSystemPath(projectRoot),
+    projectSourceRoot: sourceRoot && getSystemPath(sourceRoot),
+  };
+}
+
+export function getIndexOutputFile(index: BrowserBuilderSchema['index']): string {
+  if (typeof index === 'string') {
+    return path.basename(index);
+  } else {
+    return index.output || 'index.html';
+  }
+}
+
+export function getIndexInputFile(index: BrowserBuilderSchema['index']): string {
+  if (typeof index === 'string') {
+    return index;
+  } else {
+    return index.input;
+  }
 }

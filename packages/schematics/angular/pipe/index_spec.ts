@@ -1,16 +1,16 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import { SchematicTestRunner, UnitTestTree } from '@angular-devkit/schematics/testing';
 import { Schema as ApplicationOptions } from '../application/schema';
 import { createAppModule, getFileContent } from '../utility/test';
 import { Schema as WorkspaceOptions } from '../workspace/schema';
 import { Schema as PipeOptions } from './schema';
-
 
 describe('Pipe Schematic', () => {
   const schematicRunner = new SchematicTestRunner(
@@ -19,7 +19,6 @@ describe('Pipe Schematic', () => {
   );
   const defaultOptions: PipeOptions = {
     name: 'foo',
-    spec: true,
     module: undefined,
     export: false,
     flat: true,
@@ -42,8 +41,9 @@ describe('Pipe Schematic', () => {
   };
   let appTree: UnitTestTree;
   beforeEach(async () => {
-    appTree = schematicRunner.runSchematic('workspace', workspaceOptions);
-    appTree = await schematicRunner.runSchematicAsync('application', appOptions, appTree)
+    appTree = await schematicRunner.runSchematicAsync('workspace', workspaceOptions).toPromise();
+    appTree = await schematicRunner
+      .runSchematicAsync('application', appOptions, appTree)
       .toPromise();
   });
 
@@ -57,6 +57,8 @@ describe('Pipe Schematic', () => {
     const moduleContent = getFileContent(tree, '/projects/bar/src/app/app.module.ts');
     expect(moduleContent).toMatch(/import.*Foo.*from '.\/foo.pipe'/);
     expect(moduleContent).toMatch(/declarations:\s*\[[^\]]+?,\r?\n\s+FooPipe\r?\n/m);
+    const fileContent = tree.readContent('/projects/bar/src/app/foo.pipe.ts');
+    expect(fileContent).toContain('transform(value: unknown, ...args: unknown[])');
   });
 
   it('should import into a specified module', async () => {
@@ -80,11 +82,9 @@ describe('Pipe Schematic', () => {
   });
 
   it('should handle a path in the name and module options', async () => {
-    appTree = await schematicRunner.runSchematicAsync(
-      'module',
-      { name: 'admin/module', project: 'bar' },
-      appTree,
-    ).toPromise();
+    appTree = await schematicRunner
+      .runSchematicAsync('module', { name: 'admin/module', project: 'bar' }, appTree)
+      .toPromise();
 
     const options = { ...defaultOptions, module: 'admin/module' };
     appTree = await schematicRunner.runSchematicAsync('pipe', options, appTree).toPromise();
@@ -98,7 +98,7 @@ describe('Pipe Schematic', () => {
 
     const tree = await schematicRunner.runSchematicAsync('pipe', options, appTree).toPromise();
     const appModuleContent = getFileContent(tree, '/projects/bar/src/app/app.module.ts');
-    expect(appModuleContent).toMatch(/exports: \[FooPipe\]/);
+    expect(appModuleContent).toMatch(/exports: \[\n(\s*) {2}FooPipe\n\1\]/);
   });
 
   it('should respect the flat flag', async () => {
@@ -137,5 +137,14 @@ describe('Pipe Schematic', () => {
     appTree.rename('/projects/bar/src/app/app.module.ts', '/projects/bar/custom/app/app.module.ts');
     appTree = await schematicRunner.runSchematicAsync('pipe', defaultOptions, appTree).toPromise();
     expect(appTree.files).toContain('/projects/bar/custom/app/foo.pipe.ts');
+  });
+
+  it('should respect the skipTests flag', async () => {
+    const options = { ...defaultOptions, skipTests: true };
+
+    const tree = await schematicRunner.runSchematicAsync('pipe', options, appTree).toPromise();
+    const files = tree.files;
+    expect(files).not.toContain('/projects/bar/src/app/foo.pipe.spec.ts');
+    expect(files).toContain('/projects/bar/src/app/foo.pipe.ts');
   });
 });

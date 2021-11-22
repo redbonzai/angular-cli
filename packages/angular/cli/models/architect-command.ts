@@ -1,21 +1,22 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import { Architect, Target } from '@angular-devkit/architect';
 import { WorkspaceNodeModulesArchitectHost } from '@angular-devkit/architect/node';
-import { experimental, json, schema, tags } from '@angular-devkit/core';
-import { NodeJsSyncHost } from '@angular-devkit/core/node';
-import { BepJsonWriter } from '../utilities/bep';
+import { json, schema, tags } from '@angular-devkit/core';
+import { existsSync } from 'fs';
+import * as path from 'path';
 import { parseJsonSchemaToOptions } from '../utilities/json-schema';
+import { getPackageManager } from '../utilities/package-manager';
 import { isPackageNameSafeForAnalytics } from './analytics';
 import { BaseCommandOptions, Command } from './command';
 import { Arguments, Option } from './interface';
 import { parseArguments } from './parser';
-import { WorkspaceLoader } from './workspace-loader';
 
 export interface ArchitectCommandOptions extends BaseCommandOptions {
   project?: string;
@@ -26,29 +27,50 @@ export interface ArchitectCommandOptions extends BaseCommandOptions {
 
 export abstract class ArchitectCommand<
   T extends ArchitectCommandOptions = ArchitectCommandOptions,
-> extends Command<ArchitectCommandOptions> {
-  protected _architect: Architect;
-  protected _architectHost: WorkspaceNodeModulesArchitectHost;
-  protected _workspace: experimental.workspace.Workspace;
-  protected _registry: json.schema.SchemaRegistry;
+> extends Command<T> {
+  protected _architect!: Architect;
+  protected _architectHost!: WorkspaceNodeModulesArchitectHost;
+  protected _registry!: json.schema.SchemaRegistry;
+  protected override readonly useReportAnalytics = false;
 
   // If this command supports running multiple targets.
   protected multiTarget = false;
 
   target: string | undefined;
+  missingTargetError: string | undefined;
 
-  public async initialize(options: ArchitectCommandOptions & Arguments): Promise<void> {
-    await super.initialize(options);
+  protected async onMissingTarget(projectName?: string): Promise<void | number> {
+    if (this.missingTargetError) {
+      this.logger.fatal(this.missingTargetError);
 
+      return 1;
+    }
+
+    if (projectName) {
+      this.logger.fatal(`Project '${projectName}' does not support the '${this.target}' target.`);
+    } else {
+      this.logger.fatal(`No projects support the '${this.target}' target.`);
+    }
+
+    return 1;
+  }
+
+  // eslint-disable-next-line max-lines-per-function
+  public override async initialize(options: T & Arguments): Promise<number | void> {
     this._registry = new json.schema.CoreSchemaRegistry();
     this._registry.addPostTransform(json.schema.transforms.addUndefinedDefaults);
+    this._registry.useXDeprecatedProvider((msg) => this.logger.warn(msg));
 
-    const workspaceLoader = new WorkspaceLoader(new NodeJsSyncHost());
+    if (!this.workspace) {
+      this.logger.fatal('A workspace is required for this command.');
 
-    const workspace = await workspaceLoader.loadWorkspace(this.workspace.root);
-    this._workspace = workspace;
+      return 1;
+    }
 
-    this._architectHost = new WorkspaceNodeModulesArchitectHost(workspace, this.workspace.root);
+    this._architectHost = new WorkspaceNodeModulesArchitectHost(
+      this.workspace,
+      this.workspace.basePath,
+    );
     this._architect = new Architect(this._architectHost, this._registry);
 
     if (!this.target) {
@@ -59,32 +81,40 @@ export abstract class ArchitectCommand<
 
       const specifier = this._makeTargetSpecifier(options);
       if (!specifier.project || !specifier.target) {
-        throw new Error('Cannot determine project or target for command.');
+        this.logger.fatal('Cannot determine project or target for command.');
+
+        return 1;
       }
 
       return;
     }
 
-    const commandLeftovers = options['--'];
     let projectName = options.project;
+    if (projectName && !this.workspace.projects.has(projectName)) {
+      this.logger.fatal(`Project '${projectName}' does not exist.`);
+
+      return 1;
+    }
+
+    const commandLeftovers = options['--'];
     const targetProjectNames: string[] = [];
-    for (const name of this._workspace.listProjectNames()) {
-      if (this._workspace.getProjectTargets(name)[this.target]) {
+    for (const [name, project] of this.workspace.projects) {
+      if (project.targets.has(this.target)) {
         targetProjectNames.push(name);
       }
     }
 
-    if (targetProjectNames.length === 0) {
-      throw new Error(`No projects support the '${this.target}' target.`);
+    if (projectName && !targetProjectNames.includes(projectName)) {
+      return await this.onMissingTarget(projectName);
     }
 
-    if (projectName && !targetProjectNames.includes(projectName)) {
-      throw new Error(`Project '${projectName}' does not support the '${this.target}' target.`);
+    if (targetProjectNames.length === 0) {
+      return await this.onMissingTarget();
     }
 
     if (!projectName && commandLeftovers && commandLeftovers.length > 0) {
       const builderNames = new Set<string>();
-      const leftoverMap = new Map<string, { optionDefs: Option[], parsedOptions: Arguments }>();
+      const leftoverMap = new Map<string, { optionDefs: Option[]; parsedOptions: Arguments }>();
       let potentialProjectNames = new Set<string>(targetProjectNames);
       for (const name of targetProjectNames) {
         const builderName = await this._architectHost.getBuilderNameForTarget({
@@ -96,7 +126,19 @@ export abstract class ArchitectCommand<
           builderNames.add(builderName);
         }
 
-        const builderDesc = await this._architectHost.resolveBuilder(builderName);
+        let builderDesc;
+        try {
+          builderDesc = await this._architectHost.resolveBuilder(builderName);
+        } catch (e) {
+          if (e.code === 'MODULE_NOT_FOUND') {
+            await this.warnOnMissingNodeModules(this.workspace.basePath);
+            this.logger.fatal(`Could not find the '${builderName}' builder's node package.`);
+
+            return 1;
+          }
+          throw e;
+        }
+
         const optionDefs = await parseJsonSchemaToOptions(
           this._registry,
           builderDesc.optionSchema as json.JsonObject,
@@ -105,7 +147,9 @@ export abstract class ArchitectCommand<
         const builderLeftovers = parsedOptions['--'] || [];
         leftoverMap.set(name, { optionDefs, parsedOptions });
 
-        potentialProjectNames = new Set(builderLeftovers.filter(x => potentialProjectNames.has(x)));
+        potentialProjectNames = new Set(
+          builderLeftovers.filter((x) => potentialProjectNames.has(x)),
+        );
       }
 
       if (potentialProjectNames.size === 1) {
@@ -138,16 +182,18 @@ export abstract class ArchitectCommand<
       }
 
       if (!projectName && this.multiTarget && builderNames.size > 1) {
-        throw new Error(tags.oneLine`
+        this.logger.fatal(tags.oneLine`
           Architect commands with command line overrides cannot target different builders. The
           '${this.target}' target would run on projects ${targetProjectNames.join()} which have the
           following builders: ${'\n  ' + [...builderNames].join('\n  ')}
         `);
+
+        return 1;
       }
     }
 
     if (!projectName && !this.multiTarget) {
-      const defaultProjectName = this._workspace.getDefaultProjectName();
+      const defaultProjectName = this.workspace.extensions['defaultProject'] as string;
       if (targetProjectNames.length === 1) {
         projectName = targetProjectNames[0];
       } else if (defaultProjectName && targetProjectNames.includes(defaultProjectName)) {
@@ -156,7 +202,11 @@ export abstract class ArchitectCommand<
         // This is a special case where we just return.
         return;
       } else {
-        throw new Error('Cannot determine project or target for command.');
+        this.logger.fatal(
+          this.missingTargetError || 'Cannot determine project or target for command.',
+        );
+
+        return 1;
       }
     }
 
@@ -166,115 +216,124 @@ export abstract class ArchitectCommand<
       project: projectName || (targetProjectNames.length > 0 ? targetProjectNames[0] : ''),
       target: this.target,
     });
-    const builderDesc = await this._architectHost.resolveBuilder(builderConf);
 
-    this.description.options.push(...(
-      await parseJsonSchemaToOptions(this._registry, builderDesc.optionSchema as json.JsonObject)
-    ));
+    let builderDesc;
+    try {
+      builderDesc = await this._architectHost.resolveBuilder(builderConf);
+    } catch (e) {
+      if (e.code === 'MODULE_NOT_FOUND') {
+        await this.warnOnMissingNodeModules(this.workspace.basePath);
+        this.logger.fatal(`Could not find the '${builderConf}' builder's node package.`);
+
+        return 1;
+      }
+      throw e;
+    }
+
+    this.description.options.push(
+      ...(await parseJsonSchemaToOptions(
+        this._registry,
+        builderDesc.optionSchema as json.JsonObject,
+      )),
+    );
 
     // Update options to remove analytics from options if the builder isn't safelisted.
     for (const o of this.description.options) {
-      if (o.userAnalytics) {
-        if (!isPackageNameSafeForAnalytics(builderConf)) {
-          o.userAnalytics = undefined;
-        }
+      if (o.userAnalytics && !isPackageNameSafeForAnalytics(builderConf)) {
+        o.userAnalytics = undefined;
       }
     }
+  }
+
+  private async warnOnMissingNodeModules(basePath: string): Promise<void> {
+    // Check for a `node_modules` directory (npm, yarn non-PnP, etc.)
+    if (existsSync(path.resolve(basePath, 'node_modules'))) {
+      return;
+    }
+
+    // Check for yarn PnP files
+    if (
+      existsSync(path.resolve(basePath, '.pnp.js')) ||
+      existsSync(path.resolve(basePath, '.pnp.cjs')) ||
+      existsSync(path.resolve(basePath, '.pnp.mjs'))
+    ) {
+      return;
+    }
+
+    const packageManager = await getPackageManager(basePath);
+    let installSuggestion = 'Try installing with ';
+    switch (packageManager) {
+      case 'npm':
+        installSuggestion += `'npm install'`;
+        break;
+      case 'yarn':
+        installSuggestion += `'yarn'`;
+        break;
+      default:
+        installSuggestion += `the project's package manager`;
+        break;
+    }
+
+    this.logger.warn(`Node packages may not be installed. ${installSuggestion}.`);
   }
 
   async run(options: ArchitectCommandOptions & Arguments) {
     return await this.runArchitectTarget(options);
   }
 
-  protected async runBepTarget<T>(
-    command: string,
-    configuration: Target,
-    overrides: json.JsonObject,
-    buildEventLog: string,
-  ): Promise<number> {
-    const bep = new BepJsonWriter(buildEventLog);
-
-    // Send start
-    bep.writeBuildStarted(command);
-
-    let last = 1;
-    let rebuild = false;
-    const run = await this._architect.scheduleTarget(
-      configuration,
-      overrides,
-      { logger: this.logger },
-    );
-    await run.output.forEach(event => {
-      last = event.success ? 0 : 1;
-
-      if (rebuild) {
-        // NOTE: This will have an incorrect timestamp but this cannot be fixed
-        //       until builders report additional status events
-        bep.writeBuildStarted(command);
-      } else {
-        rebuild = true;
-      }
-
-      bep.writeBuildFinished(last);
-    });
-
-    await run.stop();
-
-    return last;
-  }
-
-  protected async runSingleTarget(
-    target: Target,
-    targetOptions: string[],
-    commandOptions: ArchitectCommandOptions & Arguments,
-  ) {
+  protected async runSingleTarget(target: Target, targetOptions: string[]) {
     // We need to build the builderSpec twice because architect does not understand
     // overrides separately (getting the configuration builds the whole project, including
     // overrides).
     const builderConf = await this._architectHost.getBuilderNameForTarget(target);
-    const builderDesc = await this._architectHost.resolveBuilder(builderConf);
+    let builderDesc;
+    try {
+      builderDesc = await this._architectHost.resolveBuilder(builderConf);
+    } catch (e) {
+      if (e.code === 'MODULE_NOT_FOUND') {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        await this.warnOnMissingNodeModules(this.workspace!.basePath);
+        this.logger.fatal(`Could not find the '${builderConf}' builder's node package.`);
+
+        return 1;
+      }
+      throw e;
+    }
     const targetOptionArray = await parseJsonSchemaToOptions(
       this._registry,
       builderDesc.optionSchema as json.JsonObject,
     );
     const overrides = parseArguments(targetOptions, targetOptionArray, this.logger);
 
-    const allowAdditionalProperties = typeof builderDesc.optionSchema === 'object'
-      && builderDesc.optionSchema.additionalProperties;
+    const allowAdditionalProperties =
+      typeof builderDesc.optionSchema === 'object' && builderDesc.optionSchema.additionalProperties;
 
     if (overrides['--'] && !allowAdditionalProperties) {
-      (overrides['--'] || []).forEach(additional => {
+      (overrides['--'] || []).forEach((additional) => {
         this.logger.fatal(`Unknown option: '${additional.split(/=/)[0]}'`);
       });
 
       return 1;
     }
 
-    if (commandOptions.buildEventLog && ['build', 'serve'].includes(this.description.name)) {
-      // The build/serve commands supports BEP messaging
-      this.logger.warn('BEP support is experimental and subject to change.');
+    await this.reportAnalytics([this.description.name], {
+      ...((await this._architectHost.getOptionsForTarget(target)) as unknown as T),
+      ...overrides,
+    });
 
-      return this.runBepTarget(
-        this.description.name,
-        target,
-        overrides as json.JsonObject,
-        commandOptions.buildEventLog as string,
-      );
-    } else {
-      const run = await this._architect.scheduleTarget(
-        target,
-        overrides as json.JsonObject,
-        {
-          logger: this.logger,
-          analytics: isPackageNameSafeForAnalytics(builderConf) ? this.analytics : undefined,
-        },
-      );
+    const run = await this._architect.scheduleTarget(target, overrides as json.JsonObject, {
+      logger: this.logger,
+      analytics: isPackageNameSafeForAnalytics(builderConf) ? this.analytics : undefined,
+    });
 
-      const result = await run.output.toPromise();
-      await run.stop();
+    const { error, success } = await run.output.toPromise();
+    await run.stop();
 
-      return result.success ? 0 : 1;
+    if (error) {
+      this.logger.error(error);
     }
+
+    return success ? 0 : 1;
   }
 
   protected async runArchitectTarget(
@@ -289,23 +348,19 @@ export abstract class ArchitectCommand<
         // Running them in parallel would jumble the log messages.
         let result = 0;
         for (const project of this.getProjectNamesByTarget(this.target)) {
-          result |= await this.runSingleTarget(
-            { ...targetSpec, project } as Target,
-            extra,
-            options,
-          );
+          result |= await this.runSingleTarget({ ...targetSpec, project } as Target, extra);
         }
 
         return result;
       } else {
-        return await this.runSingleTarget(targetSpec, extra, options);
+        return await this.runSingleTarget(targetSpec, extra);
       }
     } catch (e) {
       if (e instanceof schema.SchemaValidationException) {
         const newErrors: schema.SchemaValidatorError[] = [];
         for (const schemaError of e.errors) {
           if (schemaError.keyword === 'additionalProperties') {
-            const unknownProperty = schemaError.params.additionalProperty;
+            const unknownProperty = schemaError.params?.additionalProperty;
             if (unknownProperty in options) {
               const dashes = unknownProperty.length === 1 ? '-' : '--';
               this.logger.fatal(`Unknown option: '${dashes}${unknownProperty}'`);
@@ -327,9 +382,13 @@ export abstract class ArchitectCommand<
   }
 
   private getProjectNamesByTarget(targetName: string): string[] {
-    const allProjectsForTargetName = this._workspace.listProjectNames().map(projectName =>
-      this._workspace.getProjectTargets(projectName)[targetName] ? projectName : null,
-    ).filter(x => !!x) as string[];
+    const allProjectsForTargetName: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    for (const [name, project] of this.workspace!.projects) {
+      if (project.targets.has(targetName)) {
+        allProjectsForTargetName.push(name);
+      }
+    }
 
     if (this.multiTarget) {
       // For multi target commands, we always list all projects that have the target.
@@ -337,7 +396,8 @@ export abstract class ArchitectCommand<
     } else {
       // For single target commands, we try the default project first,
       // then the full list if it has a single project, then error out.
-      const maybeDefaultProject = this._workspace.getDefaultProjectName();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      const maybeDefaultProject = this.workspace!.extensions['defaultProject'] as string;
       if (maybeDefaultProject && allProjectsForTargetName.includes(maybeDefaultProject)) {
         return [maybeDefaultProject];
       }
@@ -362,9 +422,25 @@ export abstract class ArchitectCommand<
     } else {
       project = commandOptions.project;
       target = this.target;
-      configuration = commandOptions.configuration;
-      if (!configuration && commandOptions.prod) {
+      if (commandOptions.prod) {
+        const defaultConfig =
+          project &&
+          target &&
+          this.workspace?.projects.get(project)?.targets.get(target)?.defaultConfiguration;
+
+        this.logger.warn(
+          defaultConfig === 'production'
+            ? 'Option "--prod" is deprecated: No need to use this option as this builder defaults to configuration "production".'
+            : 'Option "--prod" is deprecated: Use "--configuration production" instead.',
+        );
+        // The --prod flag will always be the first configuration, available to be overwritten
+        // by following configurations.
         configuration = 'production';
+      }
+      if (commandOptions.configuration) {
+        configuration = `${configuration ? `${configuration},` : ''}${
+          commandOptions.configuration
+        }`;
       }
     }
 

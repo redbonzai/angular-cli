@@ -1,22 +1,60 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-// tslint:disable-next-line:no-implicit-dependencies
+
 import { tags } from '@angular-devkit/core';
 import { transformJavascript } from '../helpers/transform-javascript';
 import { getWrapEnumsTransformer } from './wrap-enums';
 
+const transform = (content: string) =>
+  transformJavascript({ content, getTransforms: [getWrapEnumsTransformer] }).content;
 
-const transform = (content: string) => transformJavascript(
-  { content, getTransforms: [getWrapEnumsTransformer] }).content;
-
-// tslint:disable:no-big-function
 describe('wrap enums and classes transformer', () => {
   describe('wraps class declarations', () => {
+    it('should wrap default exported classes', () => {
+      const defaultClass = tags.stripIndent`
+       export default class CustomComponentEffects {
+          constructor(_actions) {
+            this._actions = _actions;
+            this.doThis = this._actions;
+          }
+        }
+        CustomComponentEffects.decorators = [{ type: Injectable }];
+      `;
+
+      const namedClass = tags.stripIndent`
+        class CustomComponent {
+          constructor(_actions) {
+            this._actions = _actions;
+            this.doThis = this._actions;
+          }
+        }
+        CustomComponent.decorators = [{ type: Injectable }];
+      `;
+
+      const output = tags.stripIndent`
+        let CustomComponentEffects = /*@__PURE__*/ (() => {
+          ${defaultClass.replace('export default ', '')}
+
+          return CustomComponentEffects;
+        })();
+        export default CustomComponentEffects;
+
+        let CustomComponent = /*@__PURE__*/ (() => {
+          ${namedClass}
+
+          return CustomComponent;
+        })();
+      `;
+
+      const input = defaultClass + namedClass;
+      expect(tags.oneLine`${transform(input)}`).toEqual(tags.oneLine`${output}`);
+    });
+
     it('should wrap tsickle emitted classes which followed by metadata', () => {
       const input = tags.stripIndent`
        class CustomComponentEffects {
@@ -38,10 +76,41 @@ describe('wrap enums and classes transformer', () => {
       `;
 
       const output = tags.stripIndent`
-        const CustomComponentEffects = /*@__PURE__*/ (() => {
+        let CustomComponentEffects = /*@__PURE__*/ (() => {
           ${input}
 
           return CustomComponentEffects;
+        })();
+      `;
+
+      expect(tags.oneLine`${transform(input)}`).toEqual(tags.oneLine`${output}`);
+    });
+
+    it('should not wrap enum like which are inside of methods', () => {
+      const input = tags.stripIndent`
+        class LayoutDirective {
+          constructor(elRef) { }
+
+          applyStyleToElement(element, style, value) {
+            let styles = {};
+            if (typeof style === 'string') {
+                styles[style] = value;
+                style = styles;
+            }
+            styles = this.layoutConfig.disableVendorPrefixes ? style : applyCssPrefixes(style);
+            this._applyMultiValueStyleToElement(styles, element);
+          }
+        }
+        LayoutDirective.ctorParameters = () => [
+          { type: ElementRef }
+        ];
+      `;
+
+      const output = tags.stripIndent`
+        let LayoutDirective = /*@__PURE__*/ (() => {
+          ${input}
+
+          return LayoutDirective;
         })();
       `;
 
@@ -53,7 +122,7 @@ describe('wrap enums and classes transformer', () => {
         class ApplicationModule {
             constructor(appRef) { }
         }
-        ApplicationModule.ngModuleDef = ɵɵdefineNgModule({ type: ApplicationModule });
+        ApplicationModule.ɵmod = ɵɵdefineNgModule({ type: ApplicationModule });
         /*@__PURE__*/ setClassMetadata(ApplicationModule, [{
                 type: NgModule,
                 args: [{ providers: APPLICATION_MODULE_PROVIDERS }]
@@ -64,7 +133,7 @@ describe('wrap enums and classes transformer', () => {
       `;
 
       const output = tags.stripIndent`
-        const ApplicationModule = /*@__PURE__*/ (() => {
+        let ApplicationModule = /*@__PURE__*/ (() => {
           ${input}
 
           return ApplicationModule;
@@ -77,7 +146,7 @@ describe('wrap enums and classes transformer', () => {
     it('with nested static properties in IIFE', () => {
       const input = tags.stripIndent`
         class CommonModule { }
-        CommonModule.ngModuleDef = defineNgModule({
+        CommonModule.ɵmod = defineNgModule({
             type: CommonModule
         }), CommonModule.ngInjectorDef = defineInjector({
             factory: function (t) {
@@ -91,7 +160,7 @@ describe('wrap enums and classes transformer', () => {
       `;
 
       const output = tags.stripIndent`
-        const CommonModule = /*@__PURE__*/ (() => {
+        let CommonModule = /*@__PURE__*/ (() => {
           ${input}
 
           return CommonModule;
@@ -114,7 +183,7 @@ describe('wrap enums and classes transformer', () => {
       `;
 
       const output = tags.stripIndent`
-          export const Foo = /*@__PURE__*/ (() => {
+          export let Foo = /*@__PURE__*/ (() => {
             ${input.replace('export ', '')}
 
             return Foo;
@@ -130,7 +199,7 @@ describe('wrap enums and classes transformer', () => {
         TemplateRef.__NG_ELEMENT_ID__ = () => SWITCH_TEMPLATE_REF_FACTORY(TemplateRef, ElementRef);
       `;
       const output = tags.stripIndent`
-      export const TemplateRef = /*@__PURE__*/ (() => {
+      export let TemplateRef = /*@__PURE__*/ (() => {
         class TemplateRef { }
         TemplateRef.__NG_ELEMENT_ID__ = () => SWITCH_TEMPLATE_REF_FACTORY(TemplateRef, ElementRef);
         return TemplateRef;
@@ -147,7 +216,7 @@ describe('wrap enums and classes transformer', () => {
       TemplateRef.somethingElse = true;
     `;
       const output = tags.stripIndent`
-      export const TemplateRef = /*@__PURE__*/ (() => {
+      export let TemplateRef = /*@__PURE__*/ (() => {
         class TemplateRef {
         }
         TemplateRef.__NG_ELEMENT_ID__ = () => SWITCH_TEMPLATE_REF_FACTORY(TemplateRef, ElementRef);
@@ -169,6 +238,46 @@ describe('wrap enums and classes transformer', () => {
   });
 
   describe('wrap class expressions', () => {
+    it('should wrap default exported classes', () => {
+      const defaultClass = tags.stripIndent`
+        let Foo = class Foo {
+        };
+        Foo.bar = 'bar';
+        Foo = __decorate([
+            component()
+        ], Foo);
+        export default Foo;
+      `;
+
+      const namedClass = tags.stripIndent`
+        let AggregateColumnDirective = class AggregateColumnDirective {
+          constructor(viewContainerRef) { }
+        };
+        AggregateColumnDirective = __decorate([
+            Directive({}),
+            __metadata("design:paramtypes", [ViewContainerRef])
+        ], AggregateColumnDirective);
+      `;
+
+      const output = tags.stripIndent`
+        let Foo = /*@__PURE__*/ (() => {
+          ${defaultClass.replace('export default Foo;', '')}
+
+          return Foo;
+        })();
+        export default Foo;
+
+        let AggregateColumnDirective = /*@__PURE__*/ (() => {
+          ${namedClass}
+
+          return AggregateColumnDirective;
+        })();
+      `;
+
+      const input = defaultClass + namedClass;
+      expect(tags.oneLine`${transform(input)}`).toEqual(tags.oneLine`${output}`);
+    });
+
     it('without property decorators in IIFE', () => {
       const input = tags.stripIndent`
           let AggregateColumnDirective = class AggregateColumnDirective {
@@ -181,7 +290,7 @@ describe('wrap enums and classes transformer', () => {
       `;
 
       const output = tags.stripIndent`
-          const AggregateColumnDirective = /*@__PURE__*/ (() => {
+          let AggregateColumnDirective = /*@__PURE__*/ (() => {
             ${input}
 
             return AggregateColumnDirective;
@@ -213,7 +322,7 @@ describe('wrap enums and classes transformer', () => {
 
       const output = tags.stripIndent`
         var FooDirective_1;
-        const FooDirective = /*@__PURE__*/ (() => {
+        let FooDirective = /*@__PURE__*/ (() => {
             ${classContent}
 
             return FooDirective;
@@ -236,7 +345,7 @@ describe('wrap enums and classes transformer', () => {
       `;
 
       const output = tags.stripIndent`
-          const ChipList = /*@__PURE__*/ (() => {
+          let ChipList = /*@__PURE__*/ (() => {
             ${input}
             return ChipList;
           })();`;
@@ -269,7 +378,7 @@ describe('wrap enums and classes transformer', () => {
           ChipList = __decorate$4([NotifyPropertyChanges], ChipList);`;
 
       const output = tags.stripIndent`
-          const ChipList = /*@__PURE__*/ (() => {
+          let ChipList = /*@__PURE__*/ (() => {
             ${input}
             return ChipList;
           })();`;
@@ -314,7 +423,7 @@ describe('wrap enums and classes transformer', () => {
       const output = tags.stripIndent`
           const minutesMilliSeconds = 60000;
 
-          const AggregateColumnDirective = /*@__PURE__*/ (() => {
+          let AggregateColumnDirective = /*@__PURE__*/ (() => {
             ${firstClass}
 
             return AggregateColumnDirective;
@@ -323,7 +432,7 @@ describe('wrap enums and classes transformer', () => {
           const CSS = 'e-css';
           const PRIMARY = 'e-primary';
 
-          const ChipList = /*@__PURE__*/ (() => {
+          let ChipList = /*@__PURE__*/ (() => {
             ${secondClass}
 
             return ChipList;
@@ -337,82 +446,18 @@ describe('wrap enums and classes transformer', () => {
   });
 
   describe('wrap enums', () => {
-    it('wraps ts 2.2 enums in IIFE', () => {
-      const input = tags.stripIndent`
-        export var ChangeDetectionStrategy = {};
-        ChangeDetectionStrategy.OnPush = 0;
-        ChangeDetectionStrategy.Default = 1;
-        ChangeDetectionStrategy[ChangeDetectionStrategy.OnPush] = "OnPush";
-        ChangeDetectionStrategy[ChangeDetectionStrategy.Default] = "Default";
-      `;
-      const output = tags.stripIndent`
-        export var ChangeDetectionStrategy = /*@__PURE__*/ (function () {
-          var ChangeDetectionStrategy = {};
-          ChangeDetectionStrategy.OnPush = 0;
-          ChangeDetectionStrategy.Default = 1;
-          ChangeDetectionStrategy[ChangeDetectionStrategy.OnPush] = "OnPush";
-          ChangeDetectionStrategy[ChangeDetectionStrategy.Default] = "Default";
-          return ChangeDetectionStrategy;
-        }());
-      `;
-
-      expect(tags.oneLine`${transform(input)}`).toEqual(tags.oneLine`${output}`);
-    });
-
-    it('wraps ES2015 tsickle enums in IIFE', () => {
-      const input = tags.stripIndent`
-        const ChangeDetectionStrategy = {
-            OnPush: 0,
-            Default: 1,
-        };
-        export { ChangeDetectionStrategy };
-        ChangeDetectionStrategy[ChangeDetectionStrategy.OnPush] = 'OnPush';
-        ChangeDetectionStrategy[ChangeDetectionStrategy.Default] = 'Default';
-      `;
-
-      const output = tags.stripIndent`
-        export const ChangeDetectionStrategy = /*@__PURE__*/ (function () {
-            var ChangeDetectionStrategy = { OnPush: 0, Default: 1, };
-
-            ChangeDetectionStrategy[ChangeDetectionStrategy.OnPush] = 'OnPush';
-            ChangeDetectionStrategy[ChangeDetectionStrategy.Default] = 'Default';
-            return ChangeDetectionStrategy;
-        }());
-      `;
-
-      expect(tags.oneLine`${transform(input)}`).toEqual(tags.oneLine`${output}`);
-    });
-
-    it('wraps only ES2015 tsickle enums in IIFE', () => {
+    it('should not wrap enum like object literal declarations', () => {
       const input = tags.stripIndent`
         const RendererStyleFlags3 = {
             Important: 1,
             DashCase: 2,
         };
-        export { RendererStyleFlags3 };
+        if (typeof RendererStyleFlags3 === 'object') {
+          RendererStyleFlags3[RendererStyleFlags3.Important] = 'DashCase';
+        }
         RendererStyleFlags3[RendererStyleFlags3.Important] = 'Important';
-        RendererStyleFlags3[RendererStyleFlags3.DashCase] = 'DashCase';
-
-        export const domRendererFactory3 = {
-            createRenderer: (hostElement, rendererType) => { return document; }
-        };
-
-        export const unusedValueExportToPlacateAjd = 1;
       `;
-      const output = tags.stripIndent`
-        export const RendererStyleFlags3 = /*@__PURE__*/ (function () {
-          var RendererStyleFlags3 = { Important: 1, DashCase: 2, };
-          RendererStyleFlags3[RendererStyleFlags3.Important] = 'Important';
-          RendererStyleFlags3[RendererStyleFlags3.DashCase] = 'DashCase';
-          return RendererStyleFlags3;
-        }());
-
-        export const domRendererFactory3 = {
-          createRenderer: (hostElement, rendererType) => { return document; }
-        };
-
-        export const unusedValueExportToPlacateAjd = 1;
-      `;
+      const output = input;
 
       expect(tags.oneLine`${transform(input)}`).toEqual(tags.oneLine`${output}`);
     });
@@ -514,34 +559,22 @@ describe('wrap enums and classes transformer', () => {
       expect(tags.oneLine`${transform(input)}`).toEqual(tags.oneLine`${output}`);
     });
 
-    it('wraps tsickle enums in IIFE', () => {
+    it('wraps TS string enums in IIFE', () => {
       const input = tags.stripIndent`
-        /** @enum {number} */
-        var FormatWidth = {
-          Short: 0,
-          Medium: 1,
-          Long: 2,
-          Full: 3,
-        };
-        FormatWidth[FormatWidth.Short] = "Short";
-        FormatWidth[FormatWidth.Medium] = "Medium";
-        FormatWidth[FormatWidth.Long] = "Long";
-        FormatWidth[FormatWidth.Full] = "Full";
+        export var NotificationKind;
+        (function (NotificationKind) {
+            NotificationKind["NEXT"] = "N";
+            NotificationKind["ERROR"] = "E";
+            NotificationKind["COMPLETE"] = "C";
+        })(NotificationKind || (NotificationKind = {}));
       `;
       const output = tags.stripIndent`
-        /** @enum {number} */ var FormatWidth = /*@__PURE__*/ (function () {
-          var FormatWidth = {
-            Short: 0,
-            Medium: 1,
-            Long: 2,
-            Full: 3,
-          };
-          FormatWidth[FormatWidth.Short] = "Short";
-          FormatWidth[FormatWidth.Medium] = "Medium";
-          FormatWidth[FormatWidth.Long] = "Long";
-          FormatWidth[FormatWidth.Full] = "Full";
-          return FormatWidth;
-        }());
+        export var NotificationKind = /*@__PURE__*/ (function (NotificationKind) {
+            NotificationKind["NEXT"] = "N";
+            NotificationKind["ERROR"] = "E";
+            NotificationKind["COMPLETE"] = "C";
+            return NotificationKind;
+        })({});
       `;
 
       expect(tags.oneLine`${transform(input)}`).toEqual(tags.oneLine`${output}`);

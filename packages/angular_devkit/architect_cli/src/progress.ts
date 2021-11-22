@@ -1,20 +1,20 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-import { terminal } from '@angular-devkit/core';
-import * as ProgressBar from 'progress';
+
+import ProgressBar from 'progress';
 import * as readline from 'readline';
 
 export class MultiProgressBar<Key, T> {
-  private _bars = new Map<Key, { data: T, bar: ProgressBar }>();
+  private _bars = new Map<Key, { data: T; bar: ProgressBar }>();
 
   constructor(private _status: string, private _stream = process.stderr) {}
-  private _add(id: Key, data: T): { data: T, bar: ProgressBar } {
-    const width = Math.min(80, terminal.getCapabilities(this._stream).columns || 80);
+  private _add(id: Key, data: T): { data: T; bar: ProgressBar } {
+    const width = Math.min(80, this._stream.columns || 80);
     const value = {
       data,
       bar: new ProgressBar(this._status, {
@@ -74,7 +74,7 @@ export class MultiProgressBar<Key, T> {
     readline.moveCursor(stream, 0, -this._bars.size);
     readline.cursorTo(stream, 0);
 
-    let values: Iterable<{ data: T, bar: ProgressBar }> = this._bars.values();
+    let values: Iterable<{ data: T; bar: ProgressBar }> = this._bars.values();
     if (sort) {
       values = [...values].sort((a, b) => sort(a.data, b.data));
     }

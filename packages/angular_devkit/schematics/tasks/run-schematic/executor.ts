@@ -1,16 +1,22 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import { SchematicContext, TaskExecutor } from '../../src';
 import { RunSchematicTaskOptions } from './options';
 
+export default function (): TaskExecutor<RunSchematicTaskOptions<{}>> {
+  return (options: RunSchematicTaskOptions<{}> | undefined, context: SchematicContext) => {
+    if (!options?.name) {
+      throw new Error(
+        'RunSchematicTask requires an options object with a non-empty name property.',
+      );
+    }
 
-export default function(): TaskExecutor<RunSchematicTaskOptions<{}>> {
-  return (options: RunSchematicTaskOptions<{}>, context: SchematicContext) => {
     const maybeWorkflow = context.engine.workflow;
     const collection = options.collection || context.schematic.collection.description.name;
 

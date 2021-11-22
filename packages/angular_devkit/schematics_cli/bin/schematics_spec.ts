@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
@@ -46,20 +46,23 @@ describe('schematics-cli binary', () => {
   it('dry-run works', async () => {
     const args = ['blank', 'foo', '--dry-run'];
     const res = await main({ args, stdout, stderr });
-    expect(stdout.lines).toMatch(/CREATE \/foo\/README.md/);
-    expect(stdout.lines).toMatch(/CREATE \/foo\/.gitignore/);
-    expect(stdout.lines).toMatch(/CREATE \/foo\/src\/foo\/index.ts/);
-    expect(stdout.lines).toMatch(/CREATE \/foo\/src\/foo\/index_spec.ts/);
+    expect(stdout.lines).toMatch(/CREATE foo\/README.md/);
+    expect(stdout.lines).toMatch(/CREATE foo\/.gitignore/);
+    expect(stdout.lines).toMatch(/CREATE foo\/src\/foo\/index.ts/);
+    expect(stdout.lines).toMatch(/CREATE foo\/src\/foo\/index_spec.ts/);
+    expect(stdout.lines).toMatch(/Dry run enabled./);
     expect(res).toEqual(0);
   });
 
   it('dry-run is default when debug mode', async () => {
     const args = ['blank', 'foo', '--debug'];
     const res = await main({ args, stdout, stderr });
-    expect(stdout.lines).toMatch(/CREATE \/foo\/README.md/);
-    expect(stdout.lines).toMatch(/CREATE \/foo\/.gitignore/);
-    expect(stdout.lines).toMatch(/CREATE \/foo\/src\/foo\/index.ts/);
-    expect(stdout.lines).toMatch(/CREATE \/foo\/src\/foo\/index_spec.ts/);
+    expect(stdout.lines).toMatch(/Debug mode enabled./);
+    expect(stdout.lines).toMatch(/CREATE foo\/README.md/);
+    expect(stdout.lines).toMatch(/CREATE foo\/.gitignore/);
+    expect(stdout.lines).toMatch(/CREATE foo\/src\/foo\/index.ts/);
+    expect(stdout.lines).toMatch(/CREATE foo\/src\/foo\/index_spec.ts/);
+    expect(stdout.lines).toMatch(/Dry run enabled by default in debug mode./);
     expect(res).toEqual(0);
   });
 

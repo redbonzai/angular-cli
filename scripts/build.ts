@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-// tslint:disable:no-implicit-dependencies
+
 import { JsonObject, logging } from '@angular-devkit/core';
 import * as child_process from 'child_process';
 import * as fs from 'fs';
-import * as glob from 'glob';
+import glob from 'glob';
 import * as path from 'path';
 import { packages } from '../lib/packages';
 import buildSchema from './build-schema';
@@ -17,27 +17,23 @@ import buildSchema from './build-schema';
 const minimatch = require('minimatch');
 const tar = require('tar');
 
-const gitIgnore = fs.readFileSync(path.join(__dirname, '../.gitignore'), 'utf-8')
-  .split('\n')
-  .map(line => line.replace(/#.*/, ''))
-  .filter(line => !line.match(/^\s*$/));
+const gitIgnoreFiles = fs.readFileSync(path.join(__dirname, '../.gitignore'), 'utf-8').split('\n');
+const gitIgnore = gitIgnoreFiles
+  .map((line) => line.replace(/#.*/, ''))
+  .filter((line) => !line.startsWith('!'))
+  .filter((line) => !line.match(/^\s*$/));
+const gitIgnoreExcept = gitIgnoreFiles
+  .filter((line) => line.startsWith('!'))
+  .map((line) => line.substr(1));
 
-
-function _gitIgnoreMatch(p: string) {
+function _gitIgnoreMatch(p: string): boolean {
   p = path.relative(path.dirname(__dirname), p);
 
-  return gitIgnore.some(line => minimatch(p, line));
-}
-
-
-function _mkdirp(p: string) {
-  // Create parent folder if necessary.
-  if (!fs.existsSync(path.dirname(p))) {
-    _mkdirp(path.dirname(p));
+  if (gitIgnoreExcept.some((line) => minimatch(p, line))) {
+    return false;
   }
-  if (!fs.existsSync(p)) {
-    fs.mkdirSync(p);
-  }
+
+  return gitIgnore.some((line) => minimatch(p, line));
 }
 
 function _recursiveFileList(p: string): string[] {
@@ -47,18 +43,19 @@ function _recursiveFileList(p: string): string[] {
 
   const list = fs.readdirSync(p);
 
-  return list
-    .map(subpath => {
-      const subpathList = _recursiveFileList(path.join(p, subpath));
+  return (
+    list
+      .map((subpath) => {
+        const subpathList = _recursiveFileList(path.join(p, subpath));
 
-      return [ subpath, ...subpathList.map(sp => path.join(subpath, sp))];
-    })
-    // Flatten.
-    .reduce((acc, curr) => [...acc, ...curr], [])
-    // Filter out directories.
-    .filter(sp => !fs.statSync(path.join(p, sp)).isDirectory());
+        return [subpath, ...subpathList.map((sp) => path.join(subpath, sp))];
+      })
+      // Flatten.
+      .reduce((acc, curr) => [...acc, ...curr], [])
+      // Filter out directories.
+      .filter((sp) => !fs.statSync(path.join(p, sp)).isDirectory())
+  );
 }
-
 
 // This method mimics how npm pack tars packages.
 function _tar(out: string, dir: string) {
@@ -70,25 +67,27 @@ function _tar(out: string, dir: string) {
 
   const files = _recursiveFileList(dir).map((f) => `./${f}`);
 
-  return tar.create({
-    gzip: true,
-    strict: true,
-    portable: true,
-    cwd: dir,
-    prefix: 'package/',
-    file: out,
-    sync: true,
-    // Provide a specific date in the 1980s for the benefit of zip,
-    // which is confounded by files dated at the Unix epoch 0.
-    mtime: new Date('1985-10-26T08:15:00.000Z'),
-  }, files);
+  return tar.create(
+    {
+      gzip: true,
+      strict: true,
+      portable: true,
+      cwd: dir,
+      prefix: 'package/',
+      file: out,
+      sync: true,
+      // Provide a specific date in the 1980s for the benefit of zip,
+      // which is confounded by files dated at the Unix epoch 0.
+      mtime: new Date('1985-10-26T08:15:00.000Z'),
+    },
+    files,
+  );
 }
-
 
 function _copy(from: string, to: string) {
   // Create parent folder if necessary.
   if (!fs.existsSync(path.dirname(to))) {
-    _mkdirp(path.dirname(to));
+    fs.mkdirSync(path.dirname(to), { recursive: true });
   }
 
   // Error out if destination already exists.
@@ -103,14 +102,13 @@ function _copy(from: string, to: string) {
   fs.writeFileSync(to, buffer);
 }
 
-
 function _recursiveCopy(from: string, to: string, logger: logging.Logger) {
   if (!fs.existsSync(from)) {
     logger.error(`File "${from}" does not exist.`);
     process.exit(4);
   }
   if (fs.statSync(from).isDirectory()) {
-    fs.readdirSync(from).forEach(fileName => {
+    fs.readdirSync(from).forEach((fileName) => {
       _recursiveCopy(path.join(from, fileName), path.join(to, fileName), logger);
     });
   } else {
@@ -118,28 +116,37 @@ function _recursiveCopy(from: string, to: string, logger: logging.Logger) {
   }
 }
 
-
 function _rm(p: string) {
   p = path.relative(process.cwd(), p);
   fs.unlinkSync(p);
 }
 
+function rimraf(location: string) {
+  // The below should be removed and replace with just `rmSync` when support for Node.Js 12 is removed.
+  const { rmSync, rmdirSync } = fs as typeof fs & {
+    rmSync?: (
+      path: fs.PathLike,
+      options?: {
+        force?: boolean;
+        maxRetries?: number;
+        recursive?: boolean;
+        retryDelay?: number;
+      },
+    ) => void;
+  };
 
-function _rimraf(p: string) {
-  glob.sync(path.join(p, '**/*'), { dot: true, nodir: true })
-    .forEach(p => fs.unlinkSync(p));
-  glob.sync(path.join(p, '**/*'), { dot: true })
-    .sort((a, b) => b.length - a.length)
-    .forEach(p => fs.rmdirSync(p));
+  if (rmSync) {
+    rmSync(location, { force: true, recursive: true, maxRetries: 3 });
+  } else {
+    rmdirSync(location, { recursive: true, maxRetries: 3 });
+  }
 }
-
 
 function _clean(logger: logging.Logger) {
   logger.info('Cleaning...');
   logger.info('  Removing dist/...');
-  _rimraf(path.join(__dirname, '../dist'));
+  rimraf(path.join(__dirname, '../dist'));
 }
-
 
 function _sortPackages() {
   // Order packages in order of dependency.
@@ -157,8 +164,7 @@ function _sortPackages() {
 
         if (packages[a].dependencies.indexOf(b) != -1) {
           // Swap them.
-          [sortedPackages[i], sortedPackages[i + 1]]
-            = [sortedPackages[i + 1], sortedPackages[i]];
+          [sortedPackages[i], sortedPackages[i + 1]] = [sortedPackages[i + 1], sortedPackages[i]];
           swapped = true;
         }
       }
@@ -175,7 +181,7 @@ function _exec(command: string, args: string[], opts: { cwd?: string }, logger: 
   });
 
   if (status != 0) {
-    logger.error(`Command failed: ${command} ${args.map(x => JSON.stringify(x)).join(', ')}`);
+    logger.error(`Command failed: ${command} ${args.map((x) => JSON.stringify(x)).join(', ')}`);
     if (error) {
       logger.error('Error: ' + (error ? error.message : 'undefined'));
     } else {
@@ -186,32 +192,18 @@ function _exec(command: string, args: string[], opts: { cwd?: string }, logger: 
   }
 }
 
-
 function _build(logger: logging.Logger) {
   logger.info('Building...');
-  _exec('node', [
-    require.resolve('typescript/bin/tsc'),
-    '-p',
-    'tsconfig.json',
-  ], {}, logger);
+  _exec('node', [require.resolve('typescript/bin/tsc'), '-p', 'tsconfig-build.json'], {}, logger);
 }
 
-
-async function _bazel(logger: logging.Logger) {
-  // TODO: undo this when we fully support bazel on windows.
-  // logger.info('Bazel build...');
-  // _exec('bazel', ['build', '//packages/...'], {}, logger);
-}
-
-// tslint:disable-next-line:no-big-function
-export default async function(
-  argv: { local?: boolean, snapshot?: boolean },
-  logger: logging.Logger,
+export default async function (
+  argv: { local?: boolean; snapshot?: boolean } = {},
+  logger: logging.Logger = new logging.Logger('build-logger'),
 ) {
   _clean(logger);
 
   const sortedPackages = _sortPackages();
-  await _bazel(logger);
   await buildSchema({}, logger);
   _build(logger);
 
@@ -221,19 +213,19 @@ export default async function(
     packageLogger.info(packageName);
     const pkg = packages[packageName];
     _recursiveCopy(pkg.build, pkg.dist, logger);
-    _rimraf(pkg.build);
+    rimraf(pkg.build);
   }
 
   logger.info('Merging bazel-bin/ with dist/');
   for (const packageName of sortedPackages) {
     const pkg = packages[packageName];
-    const bazelBinPath = pkg.build.replace(/([\\\/]dist[\\\/])(packages)/, (_, dist, packages) => {
+    const bazelBinPath = pkg.build.replace(/([\\/]dist[\\/])(packages)/, (_, dist, packages) => {
       return path.join(dist, 'dist-schema', packages);
     });
     if (fs.existsSync(bazelBinPath)) {
       packageLogger.info(packageName);
       _recursiveCopy(bazelBinPath, pkg.dist, logger);
-      _rimraf(bazelBinPath);
+      rimraf(bazelBinPath);
     }
   }
 
@@ -243,58 +235,77 @@ export default async function(
     resourceLogger.info(packageName);
     const pkg = packages[packageName];
     const pkgJson = pkg.packageJson;
-    const files = glob.sync(path.join(pkg.root, '**/*'), { dot: true, nodir: true });
+    const files = glob.sync('**/*', {
+      cwd: pkg.root,
+      dot: true,
+      nodir: true,
+      ignore: ['test/**/*', '**/tests/*', 'src/testing/*'],
+    });
     const subSubLogger = resourceLogger.createChild(packageName);
     subSubLogger.info(`${files.length} files total...`);
-    const resources = files
-      .map((fileName) => path.relative(pkg.root, fileName))
-      .filter(fileName => {
-        if (/(?:^|[\/\\])node_modules[\/\\]/.test(fileName)) {
-          return false;
-        }
+    const resources = files.filter((fileName) => {
+      if (/(?:^|[/\\])node_modules[/\\]/.test(fileName)) {
+        return false;
+      }
 
-        // Schematics template files.
-        if (pkgJson['schematics'] &&
-         (fileName.match(/(\/|\\)files(\/|\\)/) || fileName.match(/(\/|\\)\w+-files(\/|\\)/))) {
-          return true;
-        }
-
-        if (fileName.endsWith('package.json')) {
-          return true;
-        }
-
-        // Remove Bazel files from NPM.
-        if (fileName.endsWith('BUILD')) {
-          return false;
-        }
-
-        // Skip sources.
-        if (fileName.endsWith('.ts') && !fileName.endsWith('.d.ts')) {
-          // Verify that it was actually built.
-          if (!fs.existsSync(path.join(pkg.dist, fileName).replace(/ts$/, 'js'))) {
-            subSubLogger.error(`\nSource found but compiled file not found: "${fileName}".`);
-            process.exit(2);
-          }
-
-          // Skip all sources.
-          return false;
-        }
-
-        // Skip tsconfig only.
-        if (fileName.endsWith('tsconfig.json')) {
-          return false;
-        }
-
-        // Skip files from gitignore.
-        if (_gitIgnoreMatch(fileName)) {
-          return false;
-        }
-
+      // Schematics template files.
+      if (
+        pkgJson['schematics'] &&
+        (fileName.match(/(\/|\\)files(\/|\\)/) || fileName.match(/(\/|\\)\w+-files(\/|\\)/))
+      ) {
         return true;
-      });
+      }
+
+      // Skip test files
+      if (fileName.endsWith('_spec.ts')) {
+        return false;
+      }
+
+      if (fileName.endsWith('package.json')) {
+        return true;
+      }
+
+      if (pkg.name === '@angular-devkit/core' && fileName.startsWith('src/workspace/json/test')) {
+        return false;
+      }
+
+      // This schema is built and copied later on as schema.json.
+      if (pkg.name === '@angular/cli' && fileName.endsWith('workspace-schema.json')) {
+        return false;
+      }
+
+      // Remove Bazel files from NPM.
+      if (fileName === 'BUILD' || fileName === 'BUILD.bazel') {
+        return false;
+      }
+
+      // Skip sources.
+      if (fileName.endsWith('.ts') && !fileName.endsWith('.d.ts')) {
+        // Verify that it was actually built.
+        if (!fs.existsSync(path.join(pkg.dist, fileName).replace(/ts$/, 'js'))) {
+          subSubLogger.error(`\nSource found but compiled file not found: "${fileName}".`);
+          process.exit(2);
+        }
+
+        // Skip all sources.
+        return false;
+      }
+
+      // Skip tsconfig only.
+      if (fileName.endsWith('tsconfig.json')) {
+        return false;
+      }
+
+      // Skip files from gitignore.
+      if (_gitIgnoreMatch(fileName)) {
+        return false;
+      }
+
+      return true;
+    });
 
     subSubLogger.info(`${resources.length} resources...`);
-    resources.forEach(fileName => {
+    resources.forEach((fileName) => {
       _copy(path.join(pkg.root, fileName), path.join(pkg.dist, fileName));
     });
   }
@@ -303,6 +314,13 @@ export default async function(
   for (const packageName of sortedPackages) {
     const pkg = packages[packageName];
     _copy(path.join(__dirname, '../LICENSE'), path.join(pkg.dist, 'LICENSE'));
+
+    if (pkg.name === '@angular/cli') {
+      _copy(
+        path.join(__dirname, '../dist-schema/packages/angular/cli/lib/config/schema.json'),
+        path.join(pkg.dist, 'lib/config/schema.json'),
+      );
+    }
   }
 
   logger.info('Removing spec files...');
@@ -317,7 +335,7 @@ export default async function(
 
     specLogger.info(packageName);
     specLogger.info(`  ${files.length} spec files found...`);
-    files.forEach(fileName => _rm(fileName));
+    files.forEach((fileName) => _rm(fileName));
   }
 
   logger.info('Building ejs templates...');
@@ -333,7 +351,7 @@ export default async function(
 
     templateLogger.info(packageName);
     templateLogger.info(`  ${files.length} ejs files found...`);
-    files.forEach(fileName => {
+    files.forEach((fileName) => {
       const p = path.relative(
         path.dirname(__dirname),
         path.join(pkg.root, path.relative(pkg.dist, fileName)),
@@ -386,8 +404,8 @@ export default async function(
             const pkg = packages[depName];
             if (!pkg.snapshotRepo) {
               versionLogger.error(
-                `Package ${JSON.stringify(depName)} is not published as a snapshot. `
-                + `Fixing to current version ${v}.`,
+                `Package ${JSON.stringify(depName)} is not published as a snapshot. ` +
+                  `Fixing to current version ${v}.`,
               );
               obj[depName] = v;
             } else {
@@ -403,15 +421,19 @@ export default async function(
     fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
   }
 
+  const output: { name: string; outputPath: string }[] = [];
   logger.info('Tarring all packages...');
   const tarLogger = logger.createChild('license');
-  Object.keys(packages).forEach(pkgName => {
+  Object.keys(packages).forEach((pkgName) => {
     const pkg = packages[pkgName];
     if (!pkg.private) {
       tarLogger.info(`${pkgName} => ${pkg.tar}`);
       _tar(pkg.tar, pkg.dist);
+      output.push({ name: pkgName, outputPath: pkg.dist });
     }
   });
 
   logger.info(`Done.`);
+
+  return output;
 }

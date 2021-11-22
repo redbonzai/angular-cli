@@ -1,22 +1,22 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-// tslint:disable:no-any non-null-operator no-big-function
-import { of as observableOf } from 'rxjs';
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { map, mergeMap } from 'rxjs/operators';
-import { CoreSchemaRegistry } from './registry';
+import { SchemaFormat } from './interface';
+import { CoreSchemaRegistry, SchemaValidationException } from './registry';
 import { addUndefinedDefaults } from './transforms';
 
-
 describe('CoreSchemaRegistry', () => {
-  it('works asynchronously', done => {
+  it('works asynchronously', (done) => {
     const registry = new CoreSchemaRegistry();
     registry.addPostTransform(addUndefinedDefaults);
-    const data: any = {};  // tslint:disable-line:no-any
+    const data: any = {};
 
     registry
       .compile({
@@ -30,25 +30,26 @@ describe('CoreSchemaRegistry', () => {
             },
           },
           tslint: {
-            $ref: 'http://json.schemastore.org/tslint#',
+            $ref: 'https://json.schemastore.org/npm-link-up#',
           },
         },
       })
       .pipe(
-        mergeMap(validator => validator(data)),
-        map(result => {
+        mergeMap((validator) => validator(data)),
+        map((result) => {
           expect(result.success).toBe(true);
           expect(data.obj.num).toBeUndefined();
           expect(data.tslint).not.toBeUndefined();
         }),
       )
-      .toPromise().then(done, done.fail);
+      .toPromise()
+      .then(done, done.fail);
   });
 
-  it('supports pre transforms', done => {
+  it('supports pre transforms', (done) => {
     const registry = new CoreSchemaRegistry();
     registry.addPostTransform(addUndefinedDefaults);
-    const data: any = {};  // tslint:disable-line:no-any
+    const data = {};
 
     registry.addPreTransform((data, ptr) => {
       if (ptr == '/') {
@@ -72,18 +73,19 @@ describe('CoreSchemaRegistry', () => {
         },
       })
       .pipe(
-        mergeMap(validator => validator(data)),
-        map(result => {
+        mergeMap((validator) => validator(data)),
+        map((result) => {
           const data = result.data as any;
           expect(result.success).toBe(true);
           expect(data.str).toBe('string');
           expect(data.obj.num).toBeUndefined();
         }),
       )
-      .toPromise().then(done, done.fail);
+      .toPromise()
+      .then(done, done.fail);
   });
 
-  it('supports local references', done => {
+  it('supports local references', (done) => {
     const registry = new CoreSchemaRegistry();
     registry.addPostTransform(addUndefinedDefaults);
     const data = { numbers: { one: 1 } };
@@ -101,16 +103,17 @@ describe('CoreSchemaRegistry', () => {
         },
       })
       .pipe(
-        mergeMap(validator => validator(data)),
-        map(result => {
+        mergeMap((validator) => validator(data)),
+        map((result) => {
           expect(result.success).toBe(true);
           expect(data.numbers.one).not.toBeUndefined();
         }),
-    )
-      .toPromise().then(done, done.fail);
+      )
+      .toPromise()
+      .then(done, done.fail);
   });
 
-  it('fails on invalid additionalProperties', done => {
+  it('fails on invalid additionalProperties', (done) => {
     const registry = new CoreSchemaRegistry();
     registry.addPostTransform(addUndefinedDefaults);
     const data = { notNum: 'foo' };
@@ -121,18 +124,46 @@ describe('CoreSchemaRegistry', () => {
           num: { type: 'number' },
         },
         additionalProperties: false,
-      }).pipe(
-        mergeMap(validator => validator(data)),
-        map(result => {
+      })
+      .pipe(
+        mergeMap((validator) => validator(data)),
+        map((result) => {
           expect(result.success).toBe(false);
           expect(result.errors && result.errors[0].message).toContain(
-            'should NOT have additional properties');
+            'must NOT have additional properties',
+          );
         }),
-    )
-      .toPromise().then(done, done.fail);
+      )
+      .toPromise()
+      .then(done, done.fail);
   });
 
-  it('fails on invalid additionalProperties async', done => {
+  it('fails on invalid enum value', (done) => {
+    const registry = new CoreSchemaRegistry();
+    registry.addPostTransform(addUndefinedDefaults);
+    const data = { packageManager: 'foo' };
+
+    registry
+      .compile({
+        properties: {
+          packageManager: { type: 'string', enum: ['npm', 'yarn', 'pnpm', 'cnpm'] },
+        },
+        additionalProperties: false,
+      })
+      .pipe(
+        mergeMap((validator) => validator(data)),
+        map((result) => {
+          expect(result.success).toBe(false);
+          expect(new SchemaValidationException(result.errors).message).toContain(
+            `Data path "/packageManager" must be equal to one of the allowed values. Allowed values are: "npm", "yarn", "pnpm", "cnpm".`,
+          );
+        }),
+      )
+      .toPromise()
+      .then(done, done.fail);
+  });
+
+  it('fails on invalid additionalProperties async', (done) => {
     const registry = new CoreSchemaRegistry();
     registry.addPostTransform(addUndefinedDefaults);
     const data = { notNum: 'foo' };
@@ -144,63 +175,25 @@ describe('CoreSchemaRegistry', () => {
           num: { type: 'number' },
         },
         additionalProperties: false,
-      }).pipe(
-        mergeMap(validator => validator(data)),
-        map(result => {
-          expect(result.success).toBe(false);
-          expect(result.errors && result.errors[0].message).toContain(
-            'should NOT have additional properties');
-          expect(result.errors && result.errors[0].keyword).toBe('additionalProperties');
-        }),
-      )
-      .toPromise().then(done, done.fail);
-  });
-
-
-  // Synchronous failure is only used internally.
-  // If it's meant to be used externally then this test should change to truly be synchronous
-  // (i.e. not relyign on the observable).
-  it('works synchronously', done => {
-    const registry = new CoreSchemaRegistry();
-    registry.addPostTransform(addUndefinedDefaults);
-    const data: any = {};  // tslint:disable-line:no-any
-    let isDone = false;
-
-    registry
-      .compile({
-        properties: {
-          bool: { type: 'boolean' },
-          str: { type: 'string', default: 'someString' },
-          obj: {
-            properties: {
-              num: { type: 'number' },
-              other: { type: 'number', default: 0 },
-            },
-          },
-        },
       })
       .pipe(
-        mergeMap(validator => validator(data)),
-        map(result => {
-          expect(result.success).toBe(true);
-          expect(data.obj.num).toBeUndefined();
+        mergeMap((validator) => validator(data)),
+        map((result) => {
+          expect(result.success).toBe(false);
+          expect(result.errors?.[0].message).toContain('must NOT have additional properties');
+          expect(result.errors?.[0].keyword).toBe('additionalProperties');
         }),
       )
-      .subscribe(() => {
-        isDone = true;
-      }, done.fail);
-
-    expect(isDone).toBe(true);
-    done();
+      .toPromise()
+      .then(done, done.fail);
   });
 
-  it('supports sync format', done => {
+  it('supports sync format', (done) => {
     const registry = new CoreSchemaRegistry();
     const data = { str: 'hotdog' };
     const format = {
       name: 'is-hotdog',
       formatter: {
-        async: false,
         validate: (str: string) => str === 'hotdog',
       },
     };
@@ -214,22 +207,24 @@ describe('CoreSchemaRegistry', () => {
         },
       })
       .pipe(
-        mergeMap(validator => validator(data)),
-        map(result => {
+        mergeMap((validator) => validator(data)),
+        map((result) => {
           expect(result.success).toBe(true);
         }),
       )
-      .toPromise().then(done, done.fail);
+      .toPromise()
+      .then(done, done.fail);
   });
 
-  it('supports async format', done => {
+  it('supports async format', (done) => {
     const registry = new CoreSchemaRegistry();
     const data = { str: 'hotdog' };
-    const format = {
+
+    const format: SchemaFormat = {
       name: 'is-hotdog',
       formatter: {
         async: true,
-        validate: (str: string) => observableOf(str === 'hotdog'),
+        validate: async (str: string) => str === 'hotdog',
       },
     };
 
@@ -243,18 +238,19 @@ describe('CoreSchemaRegistry', () => {
         },
       })
       .pipe(
-        mergeMap(validator => validator(data)),
-        map(result => {
+        mergeMap((validator) => validator(data)),
+        map((result) => {
           expect(result.success).toBe(true);
         }),
       )
-      .toPromise().then(done, done.fail);
+      .toPromise()
+      .then(done, done.fail);
   });
 
-  it('shows dataPath and message on error', done => {
+  it('shows dataPath and message on error', async () => {
     const registry = new CoreSchemaRegistry();
     const data = { hotdot: 'hotdog', banana: 'banana' };
-    const format = {
+    const format: SchemaFormat = {
       name: 'is-hotdog',
       formatter: {
         async: false,
@@ -264,7 +260,7 @@ describe('CoreSchemaRegistry', () => {
 
     registry.addFormat(format);
 
-    registry
+    await registry
       .compile({
         properties: {
           hotdot: { type: 'string', format: 'is-hotdog' },
@@ -272,19 +268,19 @@ describe('CoreSchemaRegistry', () => {
         },
       })
       .pipe(
-        mergeMap(validator => validator(data)),
-        map(result => {
+        mergeMap((validator) => validator(data)),
+        map((result) => {
           expect(result.success).toBe(false);
           expect(result.errors && result.errors[0]).toBeTruthy();
           expect(result.errors && result.errors[0].keyword).toBe('format');
-          expect(result.errors && result.errors[0].dataPath).toBe('.banana');
+          expect(result.errors && result.errors[0].instancePath).toBe('/banana');
           expect(result.errors && (result.errors[0].params as any).format).toBe('is-hotdog');
         }),
       )
-      .toPromise().then(done, done.fail);
+      .toPromise();
   });
 
-  it('supports smart defaults', done => {
+  it('supports smart defaults', (done) => {
     const registry = new CoreSchemaRegistry();
     const data: any = {
       arr: [{}],
@@ -306,7 +302,7 @@ describe('CoreSchemaRegistry', () => {
       return schema['blue'];
     });
     registry.addSmartDefaultProvider('test3', () => {
-      return [ 1, 2, 3 ];
+      return [1, 2, 3];
     });
 
     registry
@@ -362,8 +358,8 @@ describe('CoreSchemaRegistry', () => {
         },
       })
       .pipe(
-        mergeMap(validator => validator(data)),
-        map(result => {
+        mergeMap((validator) => validator(data)),
+        map((result) => {
           expect(result.success).toBe(true);
           expect(data.bool).toBe(true);
           expect(data.arr[0].test).toBe('yep');
@@ -371,13 +367,14 @@ describe('CoreSchemaRegistry', () => {
           expect(data.obj.deep.arr).toEqual([1, 2, 3]);
         }),
       )
-      .toPromise().then(done, done.fail);
+      .toPromise()
+      .then(done, done.fail);
   });
 
   it('works with true as a schema and post-transforms', async () => {
     const registry = new CoreSchemaRegistry();
     registry.addPostTransform(addUndefinedDefaults);
-    const data: any = { a: 1, b: 2 };  // tslint:disable-line:no-any
+    const data = { a: 1, b: 2 };
 
     const validate = await registry.compile(true).toPromise();
     const result = await validate(data).toPromise();
@@ -386,63 +383,36 @@ describe('CoreSchemaRegistry', () => {
     expect(result.data).toBe(data);
   });
 
-  it('adds undefined properties', done => {
+  it('adds deprecated options usage', (done) => {
     const registry = new CoreSchemaRegistry();
-    registry.addPostTransform(addUndefinedDefaults);
-    const data: any = {};  // tslint:disable-line:no-any
+    const deprecatedMessages: string[] = [];
+    registry.useXDeprecatedProvider((m) => deprecatedMessages.push(m));
+
+    const data = {
+      foo: true,
+      bar: true,
+      bat: true,
+    };
 
     registry
       .compile({
         properties: {
-          bool: { type: 'boolean' },
-          str: { type: 'string', default: 'someString' },
-          obj: {
-            properties: {
-              num: { type: 'number' },
-              other: { type: 'number', default: 0 },
-            },
-          },
-          objAllOk: {
-            allOf: [
-              { type: 'object' },
-            ],
-          },
-          objAllBad: {
-            allOf: [
-              { type: 'object' },
-              { type: 'number' },
-            ],
-          },
-          objOne: {
-            oneOf: [
-              { type: 'object' },
-            ],
-          },
-          objNotOk: {
-            not: { not: { type: 'object' } },
-          },
-          objNotBad: {
-            type: 'object',
-            not: { type: 'object' },
-          },
+          foo: { type: 'boolean', 'x-deprecated': 'Use bar instead.' },
+          bar: { type: 'boolean', 'x-deprecated': true },
+          buz: { type: 'boolean', 'x-deprecated': true },
+          bat: { type: 'boolean', 'x-deprecated': false },
         },
       })
       .pipe(
-        mergeMap(validator => validator(data)),
-        map(result => {
-          expect(result.success).toBe(true);
-          expect(data.bool).toBeUndefined();
-          expect(data.str).toBe('someString');
-          expect(data.obj.num).toBeUndefined();
-          expect(data.obj.other).toBe(0);
-          expect(data.objAllOk).toEqual({});
-          expect(data.objOne).toEqual({});
-          expect(data.objAllBad).toBeUndefined();
-          expect(data.objNotOk).toEqual({});
-          expect(data.objNotBad).toBeUndefined();
+        mergeMap((validator) => validator(data)),
+        map((result) => {
+          expect(deprecatedMessages.length).toBe(2);
+          expect(deprecatedMessages[0]).toBe('Option "foo" is deprecated: Use bar instead.');
+          expect(deprecatedMessages[1]).toBe('Option "bar" is deprecated.');
+          expect(result.success).toBe(true, result.errors);
         }),
       )
-      .toPromise().then(done, done.fail);
+      .toPromise()
+      .then(done, done.fail);
   });
-
 });

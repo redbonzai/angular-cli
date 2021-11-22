@@ -1,17 +1,15 @@
+/* To learn more about this file see: https://angular.io/config/tsconfig. */
 {
   "extends": "<%= relativePathToWorkspaceRoot %>/tsconfig.json",
   "compilerOptions": {
     "outDir": "<%= relativePathToWorkspaceRoot %>/out-tsc/app",
     "types": []
   },
-  "include": [
-    "src/**/*.ts"
+  "files": [
+    "src/main.ts",
+    "src/polyfills.ts"
   ],
-  "exclude": [
-    "src/test.ts",
-    "src/**/*.spec.ts"
-  ]<% if (enableIvy) { %>,
-  "angularCompilerOptions": {
-    "enableIvy": true
-  }<% } %>
+  "include": [
+    "src/**/*.d.ts"
+  ]
 }

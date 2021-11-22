@@ -44,16 +44,115 @@ analyze your code.
 # Getting Started - Local Development
 
 ## Installation
+
 To get started locally, follow these instructions:
 
 1. If you haven't done it already, [make a fork of this repo](https://github.com/angular/angular-cli/fork).
 1. Clone to your local computer using `git`.
-1. Make sure that you have Node 10.9 or later installed. See instructions [here](https://nodejs.org/en/download/).
+1. Make sure that you have Node 12.14 or 14.0 installed. See instructions [here](https://nodejs.org/en/download/).
 1. Make sure that you have `yarn` installed; see instructions [here](https://yarnpkg.com/lang/en/docs/install/).
-1. Run `yarn` (no arguments) from the root of your clone of this project.
-1. Run `yarn link` to add all custom scripts we use to your global install.
+1. Run `yarn` (no arguments) from the root of your clone of this project to install dependencies.
+
+## Building and Installing the CLI
+
+To make a local build:
+
+```shell
+yarn build --local
+```
+
+This generates a number of tarballs in the `dist/` directory. To actually use
+the locally built tools, switch to another repository reproducing the specific
+issue you want to fix (or just generate a local repo with `ng new`). Then
+install the locally built packages:
+
+```shell
+cd "${EXAMPLE_ANGULAR_PROJECT_REPO}"
+npm install -D ${CLI_REPO}/dist/*.tgz
+```
+
+Builds of this example project will use tooling created from the previous local
+build and include any local changes. When using the CLI, it will automatically
+check for a local install and use that if present. This means you can just run:
+
+```shell
+npm install -g @angular/cli
+```
+
+to get a global install of the latest CLI release. Then running any `ng` command
+in the example project will automatically find and use the local build of the
+CLI.
+
+Note: If you are testing `ng update`, be aware that installing all the tarballs
+will also update the framework (`@angular/core`) to the latest version. In this
+case, simply install the CLI alone with
+`npm install -D ${CLI_REPO}/dist/_angular_cli.tgz`, that way the rest of the
+project remains to be upgraded with `ng update`.
+
+## Debugging
+
+To debug an invocation of the CLI, [build and install the CLI for an example
+project](#building-and-installing-the-cli), then run the desired `ng` command
+as:
+
+```shell
+node --inspect-brk node_modules/.bin/ng ...
+```
+
+This will trigger a breakpoint as the CLI starts up. You can connect to this
+using the supported mechanisms for your IDE, but the simplest option is to open
+Chrome to [chrome://inspect](chrome://inspect) and then click on the `inspect`
+link for the `node_modules/.bin/ng` Node target.
+
+Unfortunately, the CLI dynamically `require()`'s other files mid-execution, so
+the debugger is not aware of all the source code files before hand. As a result,
+it is tough to put breakpoints on files before the CLI loads them. The easiest
+workaround is to use the `debugger;` statement to stop execution in the file you
+are interested in, and then you should be able to step around and set breakpoints
+as expected.
+
+## Testing
+
+There are two different test suites which can be run locally:
+
+### Unit tests
+  * Run all tests: `yarn bazel test //packages/...`
+  * Run a subset of the tests, use the full Bazel target example: `yarn bazel test //packages/schematics/angular:angular_test`
+  * For a complete list of test targets use the following Bazel query: `yarn bazel query "tests(//packages/...)"`
+
+You can find more info about debugging [tests with Bazel in the docs.](https://github.com/angular/angular-cli/blob/master/docs/process/bazel.md#debugging-jasmine_node_test)  
+
+### End to end tests
+  * Run: `node tests/legacy-cli/run_e2e.js`
+  * Run a subset of the tests: `node tests/legacy-cli/run_e2e.js tests/legacy-cli/e2e/tests/i18n/ivy-localize-*`
+
+When running the debug commands, Node will stop and wait for a debugger to attach.
+You can attach your IDE to the debugger to stop on breakpoints and step through the code. Also, see [IDE Specific Usage](#ide-specific-usage) for a
+simpler debug story.
+
+When debugging a specific test, change `describe()` or `it()` to `fdescribe()`
+and `fit()` to focus execution to just that one test. This will keep the output clean and speed up execution by not running irrelevant tests.
+
+## IDE Specific Usage
+
+Some additional tips for developing in specific IDEs.
+
+### Intellij IDEA / WebStorm
+
+To load the project in Intellij products, simply `Open` the repository folder.
+Do **not** `Import Project`, because that will overwrite the existing
+configuration.
+
+Once opened, the editor should automatically detect run configurations in the
+workspace. Use the drop down to choose which one to run and then click the `Run`
+button to start it. When executing a debug target, make sure to click the
+`Debug` icon to automatically attach the debugger (if you click `Run`, Node will
+wait forever for a debugger to attach).
+
+![Intellij IDEA run configurations](docs/images/run-configurations.png)
 
 ## Creating New Packages
+
 Adding a package to this repository means running two separate commands:
 
 1. `schematics devkit:package PACKAGE_NAME`. This will update the `.monorepo` file, and create the
@@ -86,7 +185,6 @@ This is a monorepo which contains many tools and packages:
 |---|---|---|---|
 **Architect** | [`@angular-devkit/architect`](https://npmjs.com/package/@angular-devkit/architect) | [![latest](https://img.shields.io/npm/v/%40angular-devkit%2Farchitect/latest.svg)](https://npmjs.com/package/@angular-devkit/architect) | [![README](https://img.shields.io/badge/README--green.svg)](/packages/angular_devkit/architect/README.md) [![snapshot](https://img.shields.io/badge/snapshot--blue.svg)](https://github.com/angular/angular-devkit-architect-builds)
 **Build Angular** | [`@angular-devkit/build-angular`](https://npmjs.com/package/@angular-devkit/build-angular) | [![latest](https://img.shields.io/npm/v/%40angular-devkit%2Fbuild-angular/latest.svg)](https://npmjs.com/package/@angular-devkit/build-angular) | [![README](https://img.shields.io/badge/README--green.svg)](/packages/angular_devkit/build_angular/README.md) [![snapshot](https://img.shields.io/badge/snapshot--blue.svg)](https://github.com/angular/angular-devkit-build-angular-builds)
-**Build NgPackagr** | [`@angular-devkit/build-ng-packagr`](https://npmjs.com/package/@angular-devkit/build-ng-packagr) | [![latest](https://img.shields.io/npm/v/%40angular-devkit%2Fbuild-ng-packagr/latest.svg)](https://npmjs.com/package/@angular-devkit/build-ng-packagr) | [![README](https://img.shields.io/badge/README--green.svg)](/packages/angular_devkit/build_ng_packagr/README.md) [![snapshot](https://img.shields.io/badge/snapshot--blue.svg)](https://github.com/angular/angular-devkit-build-ng-packagr-builds)
 **Build Optimizer** | [`@angular-devkit/build-optimizer`](https://npmjs.com/package/@angular-devkit/build-optimizer) | [![latest](https://img.shields.io/npm/v/%40angular-devkit%2Fbuild-optimizer/latest.svg)](https://npmjs.com/package/@angular-devkit/build-optimizer) | [![README](https://img.shields.io/badge/README--green.svg)](/packages/angular_devkit/build_optimizer/README.md) [![snapshot](https://img.shields.io/badge/snapshot--blue.svg)](https://github.com/angular/angular-devkit-build-optimizer-builds)
 **Build Webpack** | [`@angular-devkit/build-webpack`](https://npmjs.com/package/@angular-devkit/build-webpack) | [![latest](https://img.shields.io/npm/v/%40angular-devkit%2Fbuild-webpack/latest.svg)](https://npmjs.com/package/@angular-devkit/build-webpack) | [![README](https://img.shields.io/badge/README--green.svg)](/packages/angular_devkit/build_webpack/README.md) [![snapshot](https://img.shields.io/badge/snapshot--blue.svg)](https://github.com/angular/angular-devkit-build-webpack-builds)
 **Core** | [`@angular-devkit/core`](https://npmjs.com/package/@angular-devkit/core) | [![latest](https://img.shields.io/npm/v/%40angular-devkit%2Fcore/latest.svg)](https://npmjs.com/package/@angular-devkit/core) | [![README](https://img.shields.io/badge/README--green.svg)](/packages/angular_devkit/core/README.md) [![snapshot](https://img.shields.io/badge/snapshot--blue.svg)](https://github.com/angular/angular-devkit-core-builds)
@@ -98,8 +196,6 @@ This is a monorepo which contains many tools and packages:
 |---|---|---|---|
 **Angular PWA Schematics** | [`@angular/pwa`](https://npmjs.com/package/@angular/pwa) | [![latest](https://img.shields.io/npm/v/%40angular%2Fpwa/latest.svg)](https://npmjs.com/package/@angular/pwa) |  [![snapshot](https://img.shields.io/badge/snapshot--blue.svg)](https://github.com/angular/angular-pwa-builds)
 **Angular Schematics** | [`@schematics/angular`](https://npmjs.com/package/@schematics/angular) | [![latest](https://img.shields.io/npm/v/%40schematics%2Fangular/latest.svg)](https://npmjs.com/package/@schematics/angular) |  [![snapshot](https://img.shields.io/badge/snapshot--blue.svg)](https://github.com/angular/schematics-angular-builds)
-**Schematics Schematics** | [`@schematics/schematics`](https://npmjs.com/package/@schematics/schematics) | [![latest](https://img.shields.io/npm/v/%40schematics%2Fschematics/latest.svg)](https://npmjs.com/package/@schematics/schematics) |  [![snapshot](https://img.shields.io/badge/snapshot--blue.svg)](https://github.com/angular/schematics-schematics-builds)
-**Package Update Schematics** | [`@schematics/update`](https://npmjs.com/package/@schematics/update) | [![latest](https://img.shields.io/npm/v/%40schematics%2Fupdate/latest.svg)](https://npmjs.com/package/@schematics/update) |  [![snapshot](https://img.shields.io/badge/snapshot--blue.svg)](https://github.com/angular/schematics-update-builds)
 
 #### Misc
 

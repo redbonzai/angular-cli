@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { buildOptimizer } from './build-optimizer';
 
-
+/* eslint-disable no-console */
 if (process.argv.length < 3 || process.argv.length > 4) {
   throw new Error(`
     build-optimizer should be called with either one or two arguments:

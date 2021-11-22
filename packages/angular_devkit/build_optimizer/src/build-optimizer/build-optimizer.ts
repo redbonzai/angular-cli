@@ -1,29 +1,25 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import { readFileSync } from 'fs';
 import {
   TransformJavascriptOptions,
   TransformJavascriptOutput,
+  TransformerFactoryCreator,
   transformJavascript,
 } from '../helpers/transform-javascript';
-import { getImportTslibTransformer, testImportTslib } from '../transforms/import-tslib';
 import { getPrefixClassesTransformer, testPrefixClasses } from '../transforms/prefix-classes';
 import { getPrefixFunctionsTransformer } from '../transforms/prefix-functions';
-import {
-  getScrubFileTransformer,
-  getScrubFileTransformerForCore,
-  testScrubFile,
-} from '../transforms/scrub-file';
+import { createScrubFileTransformerFactory, testScrubFile } from '../transforms/scrub-file';
 import { getWrapEnumsTransformer } from '../transforms/wrap-enums';
 
-
 // Angular packages are known to have no side effects.
-const whitelistedAngularModules = [
+const knownSideEffectFreeAngularModules = [
   /[\\/]node_modules[\\/]@angular[\\/]animations[\\/]/,
   /[\\/]node_modules[\\/]@angular[\\/]common[\\/]/,
   /[\\/]node_modules[\\/]@angular[\\/]compiler[\\/]/,
@@ -38,30 +34,23 @@ const whitelistedAngularModules = [
   /[\\/]node_modules[\\/]@angular[\\/]upgrade[\\/]/,
   /[\\/]node_modules[\\/]@angular[\\/]material[\\/]/,
   /[\\/]node_modules[\\/]@angular[\\/]cdk[\\/]/,
-];
-
-// Factories created by AOT are known to have no side effects.
-// In Angular 2/4 the file path for factories can be `.ts`, but in Angular 5 it is `.js`.
-const ngFactories = [
-  /\.ngfactory\.[jt]s/,
-  /\.ngstyle\.[jt]s/,
+  /[\\/]node_modules[\\/]rxjs[\\/]/,
 ];
 
 // Known locations for the source files of @angular/core.
-const coreFilesRegex = [
-  /[\\/]node_modules[\\/]@angular[\\/]core[\\/]esm5[\\/]/,
-  /[\\/]node_modules[\\/]@angular[\\/]core[\\/]fesm5[\\/]/,
-  /[\\/]node_modules[\\/]@angular[\\/]core[\\/]esm2015[\\/]/,
-  /[\\/]node_modules[\\/]@angular[\\/]core[\\/]fesm2015[\\/]/,
-];
+const coreFilesRegex = /[\\/]node_modules[\\/]@angular[\\/]core[\\/][f]?esm2015[\\/]/;
 
 function isKnownCoreFile(filePath: string) {
-  return coreFilesRegex.some(re => re.test(filePath));
+  return coreFilesRegex.test(filePath);
 }
 
 function isKnownSideEffectFree(filePath: string) {
-  return ngFactories.some((re) => re.test(filePath)) ||
-    whitelistedAngularModules.some((re) => re.test(filePath));
+  // rxjs add imports contain intentional side effects
+  if (/[\\/]node_modules[\\/]rxjs[\\/]add[\\/]/.test(filePath)) {
+    return false;
+  }
+
+  return knownSideEffectFreeAngularModules.some((re) => re.test(filePath));
 }
 
 export interface BuildOptimizerOptions {
@@ -76,9 +65,8 @@ export interface BuildOptimizerOptions {
 }
 
 export function buildOptimizer(options: BuildOptimizerOptions): TransformJavascriptOutput {
-
-  const { inputFilePath, isAngularCoreFile } = options;
-  let { originalFilePath, content } = options;
+  const { inputFilePath } = options;
+  let { originalFilePath, content, isAngularCoreFile } = options;
 
   if (!originalFilePath && inputFilePath) {
     originalFilePath = inputFilePath;
@@ -100,56 +88,37 @@ export function buildOptimizer(options: BuildOptimizerOptions): TransformJavascr
     };
   }
 
-  let selectedGetScrubFileTransformer = getScrubFileTransformer;
-
-  if (
-    isAngularCoreFile === true ||
-    (isAngularCoreFile === undefined && originalFilePath && isKnownCoreFile(originalFilePath))
-  ) {
-    selectedGetScrubFileTransformer = getScrubFileTransformerForCore;
+  if (isAngularCoreFile === undefined) {
+    isAngularCoreFile = !!originalFilePath && isKnownCoreFile(originalFilePath);
   }
 
-  const isWebpackBundle = content.indexOf('__webpack_require__') !== -1;
+  const hasSafeSideEffects = originalFilePath && isKnownSideEffectFree(originalFilePath);
 
   // Determine which transforms to apply.
-  const getTransforms = [];
+  const getTransforms: TransformerFactoryCreator[] = [];
 
   let typeCheck = false;
-  if (options.isSideEffectFree || originalFilePath && isKnownSideEffectFree(originalFilePath)) {
+  if (hasSafeSideEffects) {
+    // Angular modules have known safe side effects
     getTransforms.push(
       // getPrefixFunctionsTransformer is rather dangerous, apply only to known pure es5 modules.
       // It will mark both `require()` calls and `console.log(stuff)` as pure.
-      // We only apply it to whitelisted modules, since we know they are safe.
-      // getPrefixFunctionsTransformer needs to be before getFoldFileTransformer.
+      // We only apply it to modules known to be side effect free, since we know they are safe.
       getPrefixFunctionsTransformer,
-      selectedGetScrubFileTransformer,
     );
     typeCheck = true;
-  } else if (testScrubFile(content)) {
-    // Always test as these require the type checker
-    getTransforms.push(
-      selectedGetScrubFileTransformer,
-    );
-    typeCheck = true;
-  }
-
-  // tests are not needed for fast path
-  // usage will be expanded once transformers are verified safe
-  const ignoreTest = !options.emitSourceMap && !typeCheck;
-
-  if (testPrefixClasses(content)) {
+  } else if (testPrefixClasses(content)) {
+    // This is only relevant if prefix functions is not used since prefix functions will prefix IIFE wrapped classes.
     getTransforms.unshift(getPrefixClassesTransformer);
   }
 
-  // This transform introduces import/require() calls, but this won't work properly on libraries
-  // built with Webpack. These libraries use __webpack_require__() calls instead, which will break
-  // with a new import that wasn't part of it's original module list.
-  // We ignore this transform for such libraries.
-  if (!isWebpackBundle && (ignoreTest || testImportTslib(content))) {
-    getTransforms.unshift(getImportTslibTransformer);
+  if (testScrubFile(content)) {
+    // Always test as these require the type checker
+    getTransforms.push(createScrubFileTransformerFactory(isAngularCoreFile));
+    typeCheck = true;
   }
 
-  getTransforms.unshift(getWrapEnumsTransformer);
+  getTransforms.push(getWrapEnumsTransformer);
 
   const transformJavascriptOpts: TransformJavascriptOptions = {
     content: content,

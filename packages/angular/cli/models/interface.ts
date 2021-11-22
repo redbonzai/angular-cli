@@ -1,11 +1,13 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import { analytics, json, logging } from '@angular-devkit/core';
+import { AngularWorkspace } from '../utilities/config';
 
 /**
  * Value type of arguments.
@@ -37,7 +39,7 @@ export interface CommandInterface<T extends Arguments = Arguments> {
  * Command constructor.
  */
 export interface CommandConstructor {
-  new(
+  new (
     context: CommandContext,
     description: CommandDescription,
     logger: logging.Logger,
@@ -45,20 +47,15 @@ export interface CommandConstructor {
 }
 
 /**
- * A CLI workspace information.
- */
-export interface CommandWorkspace {
-  root: string;
-  configFile?: string;
-}
-
-/**
  * A command runner context.
  */
 export interface CommandContext {
-  workspace: CommandWorkspace;
+  currentDirectory: string;
+  root: string;
 
-  // This feel is optional for backward compatibility.
+  workspace?: AngularWorkspace;
+
+  // This property is optional for backward compatibility.
   analytics?: analytics.Analytics;
 }
 
@@ -148,12 +145,6 @@ export interface Option {
   positional?: number;
 
   /**
-   * Deprecation. If this flag is not false a warning will be shown on the console. Either `true`
-   * or a string to show the user as a notice.
-   */
-  deprecated?: boolean | string;
-
-  /**
    * Smart default object.
    */
   $default?: OptionSmartDefault;
@@ -163,6 +154,12 @@ export interface Option {
    * If this is falsey, do not report this option.
    */
   userAnalytics?: number;
+
+  /**
+   * Deprecation. If this flag is not false a warning will be shown on the console. Either `true`
+   * or a string to show the user as a notice.
+   */
+  deprecated?: boolean | string;
 }
 
 /**

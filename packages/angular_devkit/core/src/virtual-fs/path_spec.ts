@@ -1,13 +1,15 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import {
   InvalidPathException,
   Path,
+  PathFragment,
   asWindowsPath,
   basename,
   dirname,
@@ -16,7 +18,6 @@ import {
   relative,
   split,
 } from './path';
-
 
 describe('path', () => {
   it('normalize', () => {
@@ -57,12 +58,13 @@ describe('path', () => {
     expect(normalize('./a/../../a/b/c')).toBe('../a/b/c');
 
     // Invalid use cases.
-    expect(() => normalize('/./././../././/'))
-      .toThrow(new InvalidPathException('/./././../././/'));
-    expect(() => normalize('/./././../././/../'))
-      .toThrow(new InvalidPathException('/./././../././/../'));
-    expect(() => normalize('/./././../././a/.'))
-      .toThrow(new InvalidPathException('/./././../././a/.'));
+    expect(() => normalize('/./././../././/')).toThrow(new InvalidPathException('/./././../././/'));
+    expect(() => normalize('/./././../././/../')).toThrow(
+      new InvalidPathException('/./././../././/../'),
+    );
+    expect(() => normalize('/./././../././a/.')).toThrow(
+      new InvalidPathException('/./././../././a/.'),
+    );
 
     expect(() => normalize('/c/../../')).toThrow(new InvalidPathException('/c/../../'));
 
@@ -73,8 +75,7 @@ describe('path', () => {
     expect(normalize('C:\\a\\b\\c')).toBe('/C/a/b/c');
     expect(normalize('c:\\a\\b\\c')).toBe('/c/a/b/c');
     expect(normalize('A:\\a\\b\\c')).toBe('/A/a/b/c');
-    expect(() => normalize('A:\\..\\..'))
-      .toThrow(new InvalidPathException('A:\\..\\..'));
+    expect(() => normalize('A:\\..\\..')).toThrow(new InvalidPathException('A:\\..\\..'));
     expect(normalize('\\.\\a\\b\\c')).toBe('/a/b/c');
     expect(normalize('\\.\\a\\b\\.\\c')).toBe('/a/b/c');
     expect(normalize('\\.\\a\\b\\d\\..\\c')).toBe('/a/b/c');
@@ -83,7 +84,7 @@ describe('path', () => {
   });
 
   describe('split', () => {
-    const tests = [
+    const tests: [string, string[]][] = [
       ['a', ['a']],
       ['/a/b', ['', 'a', 'b']],
       ['a/b', ['a', 'b']],
@@ -92,31 +93,29 @@ describe('path', () => {
       ['/', ['']],
     ];
 
-    for (const goldens of tests) {
-      const result = goldens.pop();
-      const args = goldens.map((x: string) => normalize(x)) as Path[];
+    for (const [input, result] of tests) {
+      const normalizedInput = normalize(input);
 
-      it(`(${JSON.stringify(args)}) == "${result}"`, () => {
-        expect(split.apply(null, args)).toEqual(result);
+      it(`(${JSON.stringify(normalizedInput)}) == "${result}"`, () => {
+        expect(split(normalizedInput)).toEqual(result as PathFragment[]);
       });
     }
   });
 
   describe('join', () => {
-    const tests = [
-      ['a', 'a'],
-      ['/a', '/b', '/a/b'],
-      ['/a', '/b', '/c', '/a/b/c'],
-      ['/a', 'b', 'c', '/a/b/c'],
-      ['a', 'b', 'c', 'a/b/c'],
+    const tests: [string[], string][] = [
+      [['a'], 'a'],
+      [['/a', '/b'], '/a/b'],
+      [['/a', '/b', '/c'], '/a/b/c'],
+      [['/a', 'b', 'c'], '/a/b/c'],
+      [['a', 'b', 'c'], 'a/b/c'],
     ];
 
-    for (const goldens of tests) {
-      const result = goldens.pop();
-      const args = goldens.map(x => normalize(x)) as Path[];
+    for (const [input, result] of tests) {
+      const args = input.map((x) => normalize(x)) as [Path, ...Path[]];
 
       it(`(${JSON.stringify(args)}) == "${result}"`, () => {
-        expect(join.apply(null, args)).toBe(result);
+        expect(join(...args)).toBe(result);
       });
     }
   });
@@ -129,10 +128,7 @@ describe('path', () => {
       ['/a/b/c', '/a/b', '..'],
       ['/a/b/c', '/a/b/d', '../d'],
       ['/a/b/c/d/e', '/a/f/g', '../../../../f/g'],
-      [
-        '/src/app/sub1/test1', '/src/app/sub2/test2',
-        '../../sub2/test2',
-      ],
+      ['/src/app/sub1/test1', '/src/app/sub2/test2', '../../sub2/test2'],
       ['/', '/a/b/c', 'a/b/c'],
       ['/a/b/c', '/d', '../../../d'],
     ];
@@ -169,5 +165,4 @@ describe('path', () => {
     expect(asWindowsPath(normalize('c:/b/'))).toBe('c:\\b');
     expect(asWindowsPath(normalize('c:/b/c'))).toBe('c:\\b\\c');
   });
-
 });

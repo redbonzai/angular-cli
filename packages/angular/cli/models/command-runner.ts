@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import {
-  JsonParseMode,
   analytics,
   isJsonObject,
   json,
@@ -15,29 +15,34 @@ import {
   strings,
   tags,
 } from '@angular-devkit/core';
-import * as debug from 'debug';
 import { readFileSync } from 'fs';
 import { join, resolve } from 'path';
+import { AngularWorkspace } from '../utilities/config';
+import { readAndParseJson } from '../utilities/json-file';
 import { parseJsonSchemaToCommandDescription } from '../utilities/json-schema';
-import { UniversalAnalytics, getGlobalAnalytics, getSharedAnalytics } from './analytics';
+import {
+  getGlobalAnalytics,
+  getSharedAnalytics,
+  getWorkspaceAnalytics,
+  hasWorkspaceAnalyticsConfiguration,
+  promptProjectAnalytics,
+} from './analytics';
 import { Command } from './command';
-import { CommandDescription, CommandWorkspace } from './interface';
+import { CommandDescription } from './interface';
 import * as parser from './parser';
-
-const analyticsDebug = debug('ng:analytics:commands');
 
 // NOTE: Update commands.json if changing this.  It's still deep imported in one CI validation
 const standardCommands = {
   'add': '../commands/add.json',
   'analytics': '../commands/analytics.json',
   'build': '../commands/build.json',
+  'deploy': '../commands/deploy.json',
   'config': '../commands/config.json',
   'doc': '../commands/doc.json',
   'e2e': '../commands/e2e.json',
+  'extract-i18n': '../commands/extract-i18n.json',
   'make-this-awesome': '../commands/easter-egg.json',
   'generate': '../commands/generate.json',
-  'get': '../commands/deprecated.json',
-  'set': '../commands/deprecated.json',
   'help': '../commands/help.json',
   'lint': '../commands/lint.json',
   'new': '../commands/new.json',
@@ -46,7 +51,6 @@ const standardCommands = {
   'test': '../commands/test.json',
   'update': '../commands/update.json',
   'version': '../commands/version.json',
-  'xi18n': '../commands/xi18n.json',
 };
 
 export interface CommandMapOptions {
@@ -57,9 +61,28 @@ export interface CommandMapOptions {
  * Create the analytics instance.
  * @private
  */
-async function _createAnalytics(): Promise<analytics.Analytics> {
-  const config = getGlobalAnalytics();
-  const maybeSharedAnalytics = getSharedAnalytics();
+async function _createAnalytics(
+  workspace: boolean,
+  skipPrompt = false,
+): Promise<analytics.Analytics> {
+  let config = await getGlobalAnalytics();
+  // If in workspace and global analytics is enabled, defer to workspace level
+  if (workspace && config) {
+    const skipAnalytics =
+      skipPrompt ||
+      (process.env['NG_CLI_ANALYTICS'] &&
+        (process.env['NG_CLI_ANALYTICS'].toLowerCase() === 'false' ||
+          process.env['NG_CLI_ANALYTICS'] === '0'));
+    // TODO: This should honor the `no-interactive` option.
+    //       It is currently not an `ng` option but rather only an option for specific commands.
+    //       The concept of `ng`-wide options are needed to cleanly handle this.
+    if (!skipAnalytics && !(await hasWorkspaceAnalyticsConfiguration())) {
+      await promptProjectAnalytics();
+    }
+    config = await getWorkspaceAnalytics();
+  }
+
+  const maybeSharedAnalytics = await getSharedAnalytics();
 
   if (config && maybeSharedAnalytics) {
     return new analytics.MultiAnalytics([config, maybeSharedAnalytics]);
@@ -78,8 +101,7 @@ async function loadCommandDescription(
   registry: json.schema.CoreSchemaRegistry,
 ): Promise<CommandDescription> {
   const schemaPath = resolve(__dirname, path);
-  const schemaContent = readFileSync(schemaPath, 'utf-8');
-  const schema = json.parseJson(schemaContent, JsonParseMode.Loose, { path: schemaPath });
+  const schema = readAndParseJson(schemaPath);
   if (!isJsonObject(schema)) {
     throw new Error('Invalid command JSON loaded from ' + JSON.stringify(schemaPath));
   }
@@ -98,9 +120,11 @@ async function loadCommandDescription(
 export async function runCommand(
   args: string[],
   logger: logging.Logger,
-  workspace: CommandWorkspace,
+  workspace: AngularWorkspace | undefined,
   commands: CommandMapOptions = standardCommands,
-  options: { analytics?: analytics.Analytics } = {},
+  options: { analytics?: analytics.Analytics; currentDirectory: string } = {
+    currentDirectory: process.cwd(),
+  },
 ): Promise<number | void> {
   // This registry is exclusively used for flattening schemas, and not for validating.
   const registry = new schema.CoreSchemaRegistry([]);
@@ -170,7 +194,7 @@ export async function runCommand(
       const aliasDesc = await loadCommandDescription(name, commands[name], registry);
       const aliases = aliasDesc.aliases;
 
-      if (aliases && aliases.some(alias => alias === commandName)) {
+      if (aliases && aliases.some((alias) => alias === commandName)) {
         commandName = name;
         description = aliasDesc;
         break;
@@ -213,19 +237,26 @@ export async function runCommand(
       return map;
     });
 
-    const analytics = options.analytics || await _createAnalytics();
-    const context = { workspace, analytics };
+    const analytics =
+      options.analytics || (await _createAnalytics(!!workspace, description.name === 'update'));
+    const context = {
+      workspace,
+      analytics,
+      currentDirectory: options.currentDirectory,
+      root: workspace?.basePath ?? options.currentDirectory,
+    };
     const command = new description.impl(context, description, logger);
 
     // Flush on an interval (if the event loop is waiting).
     let analyticsFlushPromise = Promise.resolve();
-    setInterval(() => {
+    const analyticsFlushInterval = setInterval(() => {
       analyticsFlushPromise = analyticsFlushPromise.then(() => analytics.flush());
     }, 1000);
 
     const result = await command.validateAndRun(parsedOptions);
 
     // Flush one last time.
+    clearInterval(analyticsFlushInterval);
     await analyticsFlushPromise.then(() => analytics.flush());
 
     return result;

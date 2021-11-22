@@ -1,5 +1,6 @@
 import { appendToFile, createDir, moveFile, prependToFile } from '../../utils/fs';
-import { ng, silentNpm } from '../../utils/process';
+import { installPackage } from '../../utils/packages';
+import { ng } from '../../utils/process';
 import { updateJsonFile } from '../../utils/project';
 import { expectToFail } from '../../utils/utils';
 
@@ -10,7 +11,7 @@ export default async function () {
       '*': ['./node_modules/*'],
     };
   });
-  await ng('build');
+  await ng('build', '--configuration=development');
 
   await createDir('xyz');
   await moveFile(
@@ -18,14 +19,14 @@ export default async function () {
     'xyz/common',
   );
 
-  await expectToFail(() => ng('build'));
+  await expectToFail(() => ng('build', '--configuration=development'));
 
   await updateJsonFile('tsconfig.json', tsconfig => {
     tsconfig.compilerOptions.paths = {
       '@angular/common': [ './xyz/common' ],
     };
   });
-  await ng('build');
+  await ng('build', '--configuration=development');
 
   await updateJsonFile('tsconfig.json', tsconfig => {
     tsconfig.compilerOptions.paths = {
@@ -33,7 +34,7 @@ export default async function () {
       '@angular/common': [ './xyz/common' ],
     };
   });
-  await ng('build');
+  await ng('build', '--configuration=development');
 
   await updateJsonFile('tsconfig.json', tsconfig => {
     tsconfig.compilerOptions.paths = {
@@ -41,7 +42,7 @@ export default async function () {
       '*': ['./node_modules/*'],
     };
   });
-  await ng('build');
+  await ng('build', '--configuration=development');
 
   await updateJsonFile('tsconfig.json', tsconfig => {
     delete tsconfig.compilerOptions.paths;
@@ -50,18 +51,18 @@ export default async function () {
   await prependToFile('src/app/app.module.ts', 'import * as firebase from \'firebase\';');
   await appendToFile('src/app/app.module.ts', 'firebase.initializeApp({});');
 
-  await silentNpm('install', 'firebase@3.7.8');
-  await ng('build', '--aot');
+  await installPackage('firebase@3.7.8');
+  await ng('build', '--aot', '--configuration=development');
   await ng('test', '--watch=false');
 
-  await silentNpm('install', 'firebase@4.9.0');
-  await ng('build', '--aot');
+  await installPackage('firebase@4.9.0');
+  await ng('build', '--aot', '--configuration=development');
   await ng('test', '--watch=false');
 
   await updateJsonFile('tsconfig.json', tsconfig => {
     tsconfig.compilerOptions.paths = {};
   });
-  await ng('build');
+  await ng('build', '--configuration=development');
 
   await updateJsonFile('tsconfig.json', tsconfig => {
     tsconfig.compilerOptions.paths = {
@@ -69,19 +70,19 @@ export default async function () {
       '@lib/*/test': ['*/test'],
     };
   });
-  await ng('build');
+  await ng('build', '--configuration=development');
 
   await updateJsonFile('tsconfig.json', tsconfig => {
     tsconfig.compilerOptions.paths = {
       '@firebase/polyfill': ['./node_modules/@firebase/polyfill/index.ts'],
     };
   });
-  await expectToFail(() => ng('build'));
+  await expectToFail(() => ng('build', '--configuration=development'));
 
   await updateJsonFile('tsconfig.json', tsconfig => {
     tsconfig.compilerOptions.paths = {
       '@firebase/polyfill*': ['./node_modules/@firebase/polyfill/index.ts'],
     };
   });
-  await expectToFail(() => ng('build'));
+  await expectToFail(() => ng('build', '--configuration=development'));
 }

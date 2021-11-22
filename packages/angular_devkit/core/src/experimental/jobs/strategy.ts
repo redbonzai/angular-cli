@@ -1,29 +1,31 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import { Observable, Subject, concat, of } from 'rxjs';
 import { finalize, ignoreElements, share, shareReplay, tap } from 'rxjs/operators';
 import { JsonValue } from '../../json';
 import {
   JobDescription,
   JobHandler,
-  JobHandlerContext, JobInboundMessage,
+  JobHandlerContext,
+  JobInboundMessage,
   JobOutboundMessage,
   JobOutboundMessageKind,
 } from './api';
 
 const stableStringify = require('fast-json-stable-stringify');
 
+// eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace strategy {
-
   export type JobStrategy<
     A extends JsonValue = JsonValue,
     I extends JsonValue = JsonValue,
-    O extends JsonValue = JsonValue,
+    O extends JsonValue = JsonValue
   > = (
     handler: JobHandler<A, I, O>,
     options?: Partial<Readonly<JobDescription>>,
@@ -35,7 +37,7 @@ export namespace strategy {
   export function serialize<
     A extends JsonValue = JsonValue,
     I extends JsonValue = JsonValue,
-    O extends JsonValue = JsonValue,
+    O extends JsonValue = JsonValue
   >(): JobStrategy<A, I, O> {
     let latest: Observable<JobOutboundMessage<O>> = of();
 
@@ -44,10 +46,8 @@ export namespace strategy {
         const previous = latest;
         latest = concat(
           previous.pipe(ignoreElements()),
-          new Observable<JobOutboundMessage<O>>(o => handler(argument, context).subscribe(o)),
-        ).pipe(
-          shareReplay(0),
-        );
+          new Observable<JobOutboundMessage<O>>((o) => handler(argument, context).subscribe(o)),
+        ).pipe(shareReplay(0));
 
         return latest;
       };
@@ -58,7 +58,6 @@ export namespace strategy {
     };
   }
 
-
   /**
    * Creates a JobStrategy that will always reuse a running job, and restart it if the job ended.
    * @param replayMessages Replay ALL messages if a job is reused, otherwise just hook up where it
@@ -67,10 +66,9 @@ export namespace strategy {
   export function reuse<
     A extends JsonValue = JsonValue,
     I extends JsonValue = JsonValue,
-    O extends JsonValue = JsonValue,
+    O extends JsonValue = JsonValue
   >(replayMessages = false): JobStrategy<A, I, O> {
     let inboundBus = new Subject<JobInboundMessage<I>>();
-    let runContext: JobHandlerContext | null = null;
     let run: Observable<JobOutboundMessage<O>> | null = null;
     let state: JobOutboundMessage<O> | null = null;
 
@@ -84,17 +82,17 @@ export namespace strategy {
             // Update state.
             of(state),
             run,
-          ).pipe(
-            finalize(() => subscription.unsubscribe()),
-          );
+          ).pipe(finalize(() => subscription.unsubscribe()));
         }
 
         run = handler(argument, { ...context, inboundBus: inboundBus.asObservable() }).pipe(
           tap(
-            message => {
-              if (message.kind == JobOutboundMessageKind.Start
-                  || message.kind == JobOutboundMessageKind.OnReady
-                  || message.kind == JobOutboundMessageKind.End) {
+            (message) => {
+              if (
+                message.kind == JobOutboundMessageKind.Start ||
+                message.kind == JobOutboundMessageKind.OnReady ||
+                message.kind == JobOutboundMessageKind.End
+              ) {
                 state = message;
               }
             },
@@ -107,7 +105,6 @@ export namespace strategy {
           ),
           replayMessages ? shareReplay() : share(),
         );
-        runContext = context;
 
         return run;
       };
@@ -115,7 +112,6 @@ export namespace strategy {
       return Object.assign(newHandler, handler, options || {});
     };
   }
-
 
   /**
    * Creates a JobStrategy that will reuse a running job if the argument matches.
@@ -125,7 +121,7 @@ export namespace strategy {
   export function memoize<
     A extends JsonValue = JsonValue,
     I extends JsonValue = JsonValue,
-    O extends JsonValue = JsonValue,
+    O extends JsonValue = JsonValue
   >(replayMessages = false): JobStrategy<A, I, O> {
     const runs = new Map<string, Observable<JobOutboundMessage<O>>>();
 
@@ -138,9 +134,7 @@ export namespace strategy {
           return maybeJob;
         }
 
-        const run = handler(argument, context).pipe(
-          replayMessages ? shareReplay() : share(),
-        );
+        const run = handler(argument, context).pipe(replayMessages ? shareReplay() : share());
         runs.set(argumentJson, run);
 
         return run;
@@ -149,5 +143,4 @@ export namespace strategy {
       return Object.assign(newHandler, handler, options || {});
     };
   }
-
 }

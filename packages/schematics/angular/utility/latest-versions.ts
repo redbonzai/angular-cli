@@ -1,23 +1,24 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
 
-export const latestVersions = {
-  // These versions should be kept up to date with latest Angular peer dependencies.
-  Angular: '~8.1.0-next.1',
-  RxJs: '~6.4.0',
-  ZoneJs: '~0.9.1',
-  TypeScript: '~3.4.3',
-  TsLib: '^1.9.0',
-  // The versions below must be manually updated when making a new devkit release.
-  DevkitBuildAngular: '~0.800.0',
-  DevkitBuildNgPackagr: '~0.800.0',
-  DevkitBuildWebpack: '~0.800.0',
+export const latestVersions: Record<string, string> & {
+  Angular: string;
+  DevkitBuildAngular: string;
+} = {
+  // We could have used TypeScripts' `resolveJsonModule` to make the `latestVersion` object typesafe,
+  // but ts_library doesn't support JSON inputs.
+  ...require('./latest-versions/package.json')['dependencies'],
 
-  tsickle: '^0.35.0',
-  ngPackagr: '^5.1.0',
+  // As Angular CLI works with same minor versions of Angular Framework, a tilde match for the current
+  Angular: '~13.0.0',
+
+  // Since @angular-devkit/build-angular and @schematics/angular are always
+  // published together from the same monorepo, and they are both
+  // non-experimental, they will always have the same version.
+  DevkitBuildAngular: '~' + require('../package.json')['version'],
 };

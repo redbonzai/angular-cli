@@ -1,22 +1,18 @@
 // This may seem awkward but we're using Logger in our e2e. At this point the unit tests
 // have run already so it should be "safe", teehee.
 import { logging } from '@angular-devkit/core';
-import { terminal } from '@angular-devkit/core';
 import { createConsoleLogger } from '@angular-devkit/core/node';
-import * as glob from 'glob';
-import * as minimist from 'minimist';
+import * as colors from 'ansi-colors';
+import glob from 'glob';
+import minimist from 'minimist';
 import * as path from 'path';
 import { setGlobalVariable } from './e2e/utils/env';
 import { gitClean } from './e2e/utils/git';
-
-// RxJS
-import { filter } from 'rxjs/operators';
-
-const { blue, bold, green, red, yellow, white } = terminal;
-
+import { createNpmRegistry } from './e2e/utils/registry';
 
 Error.stackTraceLimit = Infinity;
 
+// tslint:disable:no-global-tslint-disable no-console
 
 /**
  * Here's a short description of those flags:
@@ -29,7 +25,7 @@ Error.stackTraceLimit = Infinity;
  *   --ng-tag=TAG     Use a specific tag for build snapshots. Similar to ng-snapshots but point to a
  *                    tag instead of using the latest master.
  *   --ng-snapshots   Install angular snapshot builds in the test project.
- *   --ivy	          Use the Ivy compiler.
+ *   --ve             Use the View Engine compiler.
  *   --glob           Run tests matching this glob pattern (relative to tests/e2e/).
  *   --ignore         Ignore tests matching this glob pattern.
  *   --reuse=/path    Use a path instead of create a new project. That project should have been
@@ -43,19 +39,9 @@ Error.stackTraceLimit = Infinity;
  * If unnamed flags are passed in, the list of tests will be filtered to include only those passed.
  */
 const argv = minimist(process.argv.slice(2), {
-  'boolean': [
-    'debug',
-    'ng-snapshots',
-    'noglobal',
-    'nosilent',
-    'noproject',
-    'verbose',
-    'ivy',
-  ],
-  'string': ['devkit', 'glob', 'ignore', 'reuse', 'ng-tag', 'tmpdir', 'ng-version'],
-  'number': ['nb-shards', 'shard'],
+  boolean: ['debug', 'ng-snapshots', 'noglobal', 'nosilent', 'noproject', 'verbose'],
+  string: ['devkit', 'glob', 'ignore', 'reuse', 'ng-tag', 'tmpdir', 'ng-version'],
 });
-
 
 /**
  * Set the error code of the process to 255.  This is to ensure that if something forces node
@@ -68,110 +54,54 @@ const argv = minimist(process.argv.slice(2), {
  */
 process.exitCode = 255;
 
+const logger = createConsoleLogger(argv.verbose, process.stdout, process.stderr, {
+  info: (s) => s,
+  debug: (s) => s,
+  warn: (s) => colors.bold.yellow(s),
+  error: (s) => colors.bold.red(s),
+  fatal: (s) => colors.bold.red(s),
+});
 
-const logger = createConsoleLogger(argv.verbose);
 const logStack = [logger];
 function lastLogger() {
   return logStack[logStack.length - 1];
 }
 
-// This code doesn't work and I have no idea why and no intention to investigate at this point.
-// (console as any).debug = (msg: string, ...args: any[]) => {
-//   const logger = lastLogger();
-//   if (logger) {
-//     logger.debug(msg, { args });
-//   }
-// };
-// console.log = (msg: string, ...args: any[]) => {
-//   const logger = lastLogger();
-//   if (logger) {
-//     logger.info(msg, { args });
-//   }
-// };
-// console.warn = (msg: string, ...args: any[]) => {
-//   const logger = lastLogger();
-//   if (logger) {
-//     logger.warn(msg, { args });
-//   }
-// };
-// console.error = (msg: string, ...args: any[]) => {
-//   const logger = lastLogger();
-//   if (logger) {
-//     logger.error(msg, { args });
-//   }
-// };
-
 const testGlob = argv.glob || 'tests/**/*.ts';
 let currentFileName = null;
 
 const e2eRoot = path.join(__dirname, 'e2e');
-const allSetups = glob.sync(path.join(e2eRoot, 'setup/**/*.ts'), { nodir: true })
-  .map(name => path.relative(e2eRoot, name))
+const allSetups = glob
+  .sync(path.join(e2eRoot, 'setup/**/*.ts'), { nodir: true })
+  .map((name) => path.relative(e2eRoot, name))
   .sort();
-let allTests = glob.sync(path.join(e2eRoot, testGlob), { nodir: true, ignore: argv.ignore })
-  .map(name => path.relative(e2eRoot, name))
+const allTests = glob
+  .sync(path.join(e2eRoot, testGlob), { nodir: true, ignore: argv.ignore })
+  .map((name) => path.relative(e2eRoot, name))
   // Replace windows slashes.
-  .map(name => name.replace(/\\/g, '/'))
-  .sort();
+  .map((name) => name.replace(/\\/g, '/'))
+  .sort()
+  .filter((name) => !name.endsWith('/setup.ts'));
 
-// TODO: either update or remove these tests.
-allTests = allTests
-  .filter(name => !name.endsWith('/build-app-shell-with-schematic.ts'))
-  // IS this test still valid? \/
-  .filter(name => !name.endsWith('/module-id.ts'))
-  // Do we want to support this?
-  .filter(name => !name.endsWith('different-file-format.ts'))
-  // Not sure what this test is meant to test, but with depedency changes it is not valid anymore.
-  .filter(name => !name.endsWith('loaders-resolution.ts'))
-  // NEW COMMAND
-  .filter(name => !name.includes('tests/commands/new/'))
-  // NEEDS devkit change
-  .filter(name => !name.endsWith('/existing-directory.ts'))
-  // Disabled on rc.0 due to needed sync with devkit for changes.
-  .filter(name => !name.endsWith('/service-worker.ts'));
-
-if (argv.ivy) {
-  // These tests are disabled on the Ivy-only CI job because:
-  // - Ivy doesn't support the functionality yet
-  // - The test itself is not applicable to Ivy
-  // As we transition into using Ivy as the default this list should be reassessed.
-  allTests = allTests
-    // The basic AOT check is different with Ivy and being checked in /experimental/ivy.ts.
-    .filter(name => !name.endsWith('tests/basic/aot.ts'))
-    // Ivy doesn't support i18n externally at the moment.
-    .filter(name => !name.includes('tests/i18n/'))
-    .filter(name => !name.endsWith('tests/build/aot/aot-i18n.ts'))
-    // We don't have a library consumption story yet for Ivy.
-    .filter(name => !name.endsWith('tests/generate/library/library-consumption.ts'))
-    // The additional lazy modules array does not work with Ivy because it's not needed.
-    .filter(name => !name.endsWith('tests/build/dynamic-import.ts'))
-    // We don't have a platform-server usage story yet for Ivy.
-    // It's contingent on lazy loading and factory shim considerations that are still being
-    // discussed.
-    .filter(name => !name.endsWith('tests/build/platform-server.ts'))
-    .filter(name => !name.endsWith('tests/build/build-app-shell.ts'))
-    .filter(name => !name.endsWith('tests/build/build-app-shell-with-schematic.ts'));
-}
-
-const shardId = ('shard' in argv) ? argv['shard'] : null;
+const shardId = 'shard' in argv ? argv['shard'] : null;
 const nbShards = (shardId === null ? 1 : argv['nb-shards']) || 2;
-const tests = allTests
-  .filter(name => {
-    // Check for naming tests on command line.
-    if (argv._.length == 0) {
-      return true;
-    }
+const tests = allTests.filter((name) => {
+  // Check for naming tests on command line.
+  if (argv._.length == 0) {
+    return true;
+  }
 
-    return argv._.some(argName => {
-      return path.join(process.cwd(), argName) == path.join(__dirname, 'e2e', name)
-        || argName == name
-        || argName == name.replace(/\.ts$/, '');
-    });
+  return argv._.some((argName) => {
+    return (
+      path.join(process.cwd(), argName) == path.join(__dirname, 'e2e', name) ||
+      argName == name ||
+      argName == name.replace(/\.ts$/, '')
+    );
   });
+});
 
 // Remove tests that are not part of this shard.
-const shardedTests = tests
-  .filter((name, i) => (shardId === null || (i % nbShards) == shardId));
+const shardedTests = tests.filter((name, i) => shardId === null || i % nbShards == shardId);
 const testsToRun = allSetups.concat(shardedTests);
 
 if (shardedTests.length === 0) {
@@ -191,69 +121,106 @@ if (testsToRun.length == allTests.length) {
 }
 
 setGlobalVariable('argv', argv);
+setGlobalVariable('ci', process.env['CI']?.toLowerCase() === 'true' || process.env['CI'] === '1');
+setGlobalVariable('package-manager', argv.yarn ? 'yarn' : 'npm');
+setGlobalVariable('package-registry', 'http://localhost:4873');
 
-testsToRun.reduce((previous, relativeName, testIndex) => {
-  // Make sure this is a windows compatible path.
-  let absoluteName = path.join(e2eRoot, relativeName);
-  if (/^win/.test(process.platform)) {
-    absoluteName = absoluteName.replace(/\\/g, path.posix.sep);
-  }
+const registryProcess = createNpmRegistry();
+const secureRegistryProcess = createNpmRegistry(true);
 
-  return previous.then(() => {
-    currentFileName = relativeName.replace(/\.ts$/, '');
-    const start = +new Date();
+testsToRun
+  .reduce((previous, relativeName, testIndex) => {
+    // Make sure this is a windows compatible path.
+    let absoluteName = path.join(e2eRoot, relativeName);
+    if (/^win/.test(process.platform)) {
+      absoluteName = absoluteName.replace(/\\/g, path.posix.sep);
+    }
 
-    const module = require(absoluteName);
-    const fn: (...args: any[]) => Promise<any> | any =
-      (typeof module == 'function') ? module
-      : (typeof module.default == 'function') ? module.default
-      : () => { throw new Error('Invalid test module.'); };
+    return previous.then(() => {
+      currentFileName = relativeName.replace(/\.ts$/, '');
+      const start = +new Date();
 
-    let clean = true;
-    let previousDir = null;
-    return Promise.resolve()
-      .then(() => printHeader(currentFileName, testIndex))
-      .then(() => previousDir = process.cwd())
-      .then(() => logStack.push(lastLogger().createChild(currentFileName)))
-      .then(() => fn(() => clean = false))
-      .then(() => logStack.pop(), (err: any) => { logStack.pop(); throw err; })
-      .then(() => console.log('----'))
-      .then(() => {
-        // If we're not in a setup, change the directory back to where it was before the test.
-        // This allows tests to chdir without worrying about keeping the original directory.
-        if (allSetups.indexOf(relativeName) == -1 && previousDir) {
-          process.chdir(previousDir);
-        }
-      })
-      .then(() => {
-        // Only clean after a real test, not a setup step. Also skip cleaning if the test
-        // requested an exception.
-        if (allSetups.indexOf(relativeName) == -1 && clean) {
-          logStack.push(new logging.NullLogger());
-          return gitClean()
-            .then(() => logStack.pop(), (err: any) => {
-              logStack.pop();
-              throw err;
-            });
-        }
-      })
-      .then(() => printFooter(currentFileName, start),
-        (err) => {
-          printFooter(currentFileName, start);
-          console.error(err);
-          throw err;
-        });
-  });
-}, Promise.resolve())
-  .then(() => {
-      console.log(green('Done.'));
+      const module = require(absoluteName);
+      const originalEnvVariables = {
+        ...process.env,
+      };
+
+      const fn: (skipClean?: () => void) => Promise<void> | void =
+        typeof module == 'function'
+          ? module
+          : typeof module.default == 'function'
+          ? module.default
+          : () => {
+              throw new Error('Invalid test module.');
+            };
+
+      let clean = true;
+      let previousDir = null;
+
+      return Promise.resolve()
+        .then(() => printHeader(currentFileName, testIndex))
+        .then(() => (previousDir = process.cwd()))
+        .then(() => logStack.push(lastLogger().createChild(currentFileName)))
+        .then(() => fn(() => (clean = false)))
+        .then(
+          () => logStack.pop(),
+          (err) => {
+            logStack.pop();
+            throw err;
+          },
+        )
+        .then(() => console.log('----'))
+        .then(() => {
+          // If we're not in a setup, change the directory back to where it was before the test.
+          // This allows tests to chdir without worrying about keeping the original directory.
+          if (!allSetups.includes(relativeName) && previousDir) {
+            process.chdir(previousDir);
+
+            // Restore env variables before each test.
+            console.log('  Restoring original environment variables...');
+            process.env = originalEnvVariables;
+          }
+        })
+        .then(() => {
+          // Only clean after a real test, not a setup step. Also skip cleaning if the test
+          // requested an exception.
+          if (!allSetups.includes(relativeName) && clean) {
+            logStack.push(new logging.NullLogger());
+            return gitClean().then(
+              () => logStack.pop(),
+              (err) => {
+                logStack.pop();
+                throw err;
+              },
+            );
+          }
+        })
+        .then(
+          () => printFooter(currentFileName, start),
+          (err) => {
+            printFooter(currentFileName, start);
+            console.error(err);
+            throw err;
+          },
+        );
+    });
+  }, Promise.resolve())
+  .then(
+    () => {
+      registryProcess.kill();
+      secureRegistryProcess.kill();
+
+      console.log(colors.green('Done.'));
       process.exit(0);
     },
     (err) => {
       console.log('\n');
-      console.error(red(`Test "${currentFileName}" failed...`));
-      console.error(red(err.message));
-      console.error(red(err.stack));
+      console.error(colors.red(`Test "${currentFileName}" failed...`));
+      console.error(colors.red(err.message));
+      console.error(colors.red(err.stack));
+
+      registryProcess.kill();
+      secureRegistryProcess.kill();
 
       if (argv.debug) {
         console.log(`Current Directory: ${process.cwd()}`);
@@ -266,38 +233,28 @@ testsToRun.reduce((previous, relativeName, testIndex) => {
       }
 
       process.exit(1);
-    });
-
-
-function encode(str) {
-  return str.replace(/[^A-Za-z\d\/]+/g, '-').replace(/\//g, '.').replace(/[\/-]$/, '');
-}
-
-function isTravis() {
-  return process.env['TRAVIS'];
-}
+    },
+  );
 
 function printHeader(testName: string, testIndex: number) {
   const text = `${testIndex + 1} of ${testsToRun.length}`;
-  const fullIndex = (testIndex < allSetups.length ? testIndex
+  const fullIndex =
+    (testIndex < allSetups.length
+      ? testIndex
       : (testIndex - allSetups.length) * nbShards + shardId + allSetups.length) + 1;
   const length = tests.length + allSetups.length;
-  const shard = shardId === null ? ''
-      : yellow(` [${shardId}:${nbShards}]` + bold(` (${fullIndex}/${length})`));
-  console.log(green(`Running "${bold(blue(testName))}" (${bold(white(text))}${shard})...`));
-
-  if (isTravis()) {
-    console.log(`travis_fold:start:${encode(testName)}`);
-  }
+  const shard =
+    shardId === null
+      ? ''
+      : colors.yellow(` [${shardId}:${nbShards}]` + colors.bold(` (${fullIndex}/${length})`));
+  console.log(
+    colors.green(`Running "${colors.bold.blue(testName)}" (${colors.bold.white(text)}${shard})...`),
+  );
 }
 
-function printFooter(testName, startTime) {
-  if (isTravis()) {
-    console.log(`travis_fold:end:${encode(testName)}`);
-  }
-
+function printFooter(testName: string, startTime: number) {
   // Round to hundredth of a second.
   const t = Math.round((Date.now() - startTime) / 10) / 100;
-  console.log(green('Last step took ') + bold(blue(t)) + green('s...'));
+  console.log(colors.green('Last step took ') + colors.bold.blue('' + t) + colors.green('s...'));
   console.log('');
 }

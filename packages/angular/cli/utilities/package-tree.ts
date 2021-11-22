@@ -1,76 +1,86 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-export interface PackageTreeNodeBase {
+
+import * as fs from 'fs';
+import { dirname, join } from 'path';
+import * as resolve from 'resolve';
+import { NgAddSaveDepedency } from './package-metadata';
+
+interface PackageJson {
   name: string;
+  version: string;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  'ng-update'?: {
+    migrations?: string;
+  };
+  'ng-add'?: {
+    save?: NgAddSaveDepedency;
+  };
+}
+
+function getAllDependencies(pkg: PackageJson): Set<[string, string]> {
+  return new Set([
+    ...Object.entries(pkg.dependencies || []),
+    ...Object.entries(pkg.devDependencies || []),
+    ...Object.entries(pkg.peerDependencies || []),
+    ...Object.entries(pkg.optionalDependencies || []),
+  ]);
+}
+
+export interface PackageTreeNode {
+  name: string;
+  version: string;
   path: string;
-  realpath: string;
-  error?: Error;
-  id: number;
-  isLink: boolean;
-  package: {
-    name: string;
-    version: string;
-    dependencies?: Record<string, string>;
-    devDependencies?: Record<string, string>;
-    peerDependencies?: Record<string, string>;
-    'ng-update'?: {
-      migrations?: string;
-    };
-  };
-  children: PackageTreeNode[];
+  package: PackageJson | undefined;
 }
 
-export interface PackageTreeActual extends PackageTreeNodeBase {
-  isLink: false;
-  parent?: PackageTreeActual;
+export async function readPackageJson(packageJsonPath: string): Promise<PackageJson | undefined> {
+  try {
+    return JSON.parse((await fs.promises.readFile(packageJsonPath)).toString());
+  } catch {
+    return undefined;
+  }
 }
 
-export interface PackageTreeLink extends PackageTreeNodeBase {
-  isLink: true;
-  parent: null;
-  target: PackageTreeActual;
+export function findPackageJson(workspaceDir: string, packageName: string): string | undefined {
+  try {
+    // avoid require.resolve here, see: https://github.com/angular/angular-cli/pull/18610#issuecomment-681980185
+    const packageJsonPath = resolve.sync(`${packageName}/package.json`, { basedir: workspaceDir });
+
+    return packageJsonPath;
+  } catch {
+    return undefined;
+  }
 }
 
-export type PackageTreeNode = PackageTreeActual | PackageTreeLink;
+export async function getProjectDependencies(dir: string): Promise<Map<string, PackageTreeNode>> {
+  const pkg = await readPackageJson(join(dir, 'package.json'));
+  if (!pkg) {
+    throw new Error('Could not find package.json');
+  }
 
-export function readPackageTree(path: string): Promise<PackageTreeNode> {
-  const rpt = require('read-package-tree');
+  const results = new Map<string, PackageTreeNode>();
+  for (const [name, version] of getAllDependencies(pkg)) {
+    const packageJsonPath = findPackageJson(dir, name);
+    if (!packageJsonPath) {
+      continue;
+    }
 
-  return new Promise((resolve, reject) => {
-    rpt(path, (e: Error | undefined, data: PackageTreeNode) => {
-      if (e) {
-        reject(e);
-      } else {
-        resolve(data);
-      }
+    results.set(name, {
+      name,
+      version,
+      path: dirname(packageJsonPath),
+      package: await readPackageJson(packageJsonPath),
     });
-  });
-}
+  }
 
-export function findNodeDependencies(root: PackageTreeNode, node = root) {
-  const actual = node.isLink ? node.target : node;
-
-  const rawDeps: Record<string, string> = {
-    ...actual.package.dependencies,
-    ...actual.package.devDependencies,
-    ...actual.package.peerDependencies,
-  };
-
-  return Object.entries(rawDeps).reduce(
-    (deps, [name, version]) => {
-      const depNode = root.children.find(child => {
-        return child.name === name && !child.isLink && child.parent === node;
-      }) as PackageTreeActual | undefined;
-
-      deps[name] = depNode || version;
-
-      return deps;
-    },
-    {} as Record<string, string | PackageTreeActual | undefined>,
-  );
+  return results;
 }

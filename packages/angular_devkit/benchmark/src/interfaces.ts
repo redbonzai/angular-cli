@@ -1,10 +1,11 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import { Observable } from 'rxjs';
 import { Command } from './command';
 
@@ -51,7 +52,7 @@ export interface MetricGroup {
   metrics: (Metric | AggregatedMetric)[];
 }
 
-export type Capture = (process: MonitoredProcess) => Observable<MetricGroup>;
+export type Capture = (stats: Observable<AggregatedProcessStats>) => Observable<MetricGroup>;
 
 // TODO: might need to allow reporters to say they are finished.
 export type BenchmarkReporter = (command: Command, groups: MetricGroup[]) => void;

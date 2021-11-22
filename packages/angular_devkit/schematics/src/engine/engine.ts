@@ -1,10 +1,11 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import { BaseException, PriorityQueue, logging } from '@angular-devkit/core';
 import { Observable, from as observableFrom } from 'rxjs';
 import { concatMap } from 'rxjs/operators';
@@ -32,13 +33,16 @@ import {
 } from './interface';
 import { SchematicImpl } from './schematic';
 
-
 export class UnknownUrlSourceProtocol extends BaseException {
-  constructor(url: string) { super(`Unknown Protocol on url "${url}".`); }
+  constructor(url: string) {
+    super(`Unknown Protocol on url "${url}".`);
+  }
 }
 
 export class UnknownCollectionException extends BaseException {
-  constructor(name: string) { super(`Unknown collection "${name}".`); }
+  constructor(name: string) {
+    super(`Unknown collection "${name}".`);
+  }
 }
 
 export class CircularCollectionException extends BaseException {
@@ -60,7 +64,9 @@ export class PrivateSchematicException extends BaseException {
 }
 
 export class SchematicEngineConflictingException extends BaseException {
-  constructor() { super(`A schematic was called from a different engine as its parent.`); }
+  constructor() {
+    super(`A schematic was called from a different engine as its parent.`);
+  }
 }
 
 export class UnregisteredTaskException extends BaseException {
@@ -78,13 +84,18 @@ export class UnknownTaskDependencyException extends BaseException {
 
 export class CollectionImpl<CollectionT extends object, SchematicT extends object>
   implements Collection<CollectionT, SchematicT> {
-  constructor(private _description: CollectionDescription<CollectionT>,
-              private _engine: SchematicEngine<CollectionT, SchematicT>,
-              public readonly baseDescriptions?: Array<CollectionDescription<CollectionT>>) {
-  }
+  constructor(
+    private _description: CollectionDescription<CollectionT>,
+    private _engine: SchematicEngine<CollectionT, SchematicT>,
+    public readonly baseDescriptions?: Array<CollectionDescription<CollectionT>>,
+  ) {}
 
-  get description() { return this._description; }
-  get name() { return this.description.name || '<unknown>'; }
+  get description() {
+    return this._description;
+  }
+  get name() {
+    return this.description.name || '<unknown>';
+  }
 
   createSchematic(name: string, allowPrivate = false): Schematic<CollectionT, SchematicT> {
     return this._engine.createSchematic(name, this, allowPrivate);
@@ -117,7 +128,7 @@ export class TaskScheduler {
       return new Set();
     }
 
-    const tasks = dependencies.map(dep => {
+    const tasks = dependencies.map((dep) => {
       const task = this._taskIds.get(dep);
       if (!task) {
         throw new UnknownTaskDependencyException(dep);
@@ -155,44 +166,50 @@ export class TaskScheduler {
 
     return tasks;
   }
-
 }
 
-
 export class SchematicEngine<CollectionT extends object, SchematicT extends object>
-    implements Engine<CollectionT, SchematicT> {
-
+  implements Engine<CollectionT, SchematicT> {
   private _collectionCache = new Map<string, CollectionImpl<CollectionT, SchematicT>>();
-  private _schematicCache
-    = new Map<string, Map<string, SchematicImpl<CollectionT, SchematicT>>>();
+  private _schematicCache = new WeakMap<
+    Collection<CollectionT, SchematicT>,
+    Map<string, SchematicImpl<CollectionT, SchematicT>>
+  >();
   private _taskSchedulers = new Array<TaskScheduler>();
 
-  constructor(private _host: EngineHost<CollectionT, SchematicT>, protected _workflow?: Workflow) {
+  constructor(private _host: EngineHost<CollectionT, SchematicT>, protected _workflow?: Workflow) {}
+
+  get workflow() {
+    return this._workflow || null;
+  }
+  get defaultMergeStrategy() {
+    return this._host.defaultMergeStrategy || MergeStrategy.Default;
   }
 
-  get workflow() { return this._workflow || null; }
-  get defaultMergeStrategy() { return this._host.defaultMergeStrategy || MergeStrategy.Default; }
-
-  createCollection(name: string): Collection<CollectionT, SchematicT> {
+  createCollection(
+    name: string,
+    requester?: Collection<CollectionT, SchematicT>,
+  ): Collection<CollectionT, SchematicT> {
     let collection = this._collectionCache.get(name);
     if (collection) {
       return collection;
     }
 
-    const [description, bases] = this._createCollectionDescription(name);
+    const [description, bases] = this._createCollectionDescription(name, requester?.description);
 
     collection = new CollectionImpl<CollectionT, SchematicT>(description, this, bases);
     this._collectionCache.set(name, collection);
-    this._schematicCache.set(name, new Map());
+    this._schematicCache.set(collection, new Map());
 
     return collection;
   }
 
   private _createCollectionDescription(
     name: string,
+    requester?: CollectionDescription<CollectionT>,
     parentNames?: Set<string>,
   ): [CollectionDescription<CollectionT>, Array<CollectionDescription<CollectionT>>] {
-    const description = this._host.createCollectionDescription(name);
+    const description = this._host.createCollectionDescription(name, requester);
     if (!description) {
       throw new UnknownCollectionException(name);
     }
@@ -204,7 +221,11 @@ export class SchematicEngine<CollectionT extends object, SchematicT extends obje
     if (description.extends) {
       parentNames = (parentNames || new Set<string>()).add(description.name);
       for (const baseName of description.extends) {
-        const [base, baseBases] = this._createCollectionDescription(baseName, new Set(parentNames));
+        const [base, baseBases] = this._createCollectionDescription(
+          baseName,
+          description,
+          new Set(parentNames),
+        );
 
         bases.unshift(base, ...baseBases);
       }
@@ -231,13 +252,14 @@ export class SchematicEngine<CollectionT extends object, SchematicT extends obje
     }
 
     let context: TypedSchematicContext<CollectionT, SchematicT> = {
-      debug: parent && parent.debug || false,
+      debug: (parent && parent.debug) || false,
       engine: this,
-      logger: (parent && parent.logger && parent.logger.createChild(schematic.description.name))
-              || new logging.NullLogger(),
+      logger:
+        (parent && parent.logger && parent.logger.createChild(schematic.description.name)) ||
+        new logging.NullLogger(),
       schematic,
-      strategy: (parent && parent.strategy !== undefined)
-        ? parent.strategy : this.defaultMergeStrategy,
+      strategy:
+        parent && parent.strategy !== undefined ? parent.strategy : this.defaultMergeStrategy,
       interactive,
       addTask,
     };
@@ -251,10 +273,7 @@ export class SchematicEngine<CollectionT extends object, SchematicT extends obje
     const host = this._host;
     this._taskSchedulers.push(taskScheduler);
 
-    function addTask<T>(
-      task: TaskConfigurationGenerator<T>,
-      dependencies?: Array<TaskId>,
-    ): TaskId {
+    function addTask<T>(task: TaskConfigurationGenerator<T>, dependencies?: Array<TaskId>): TaskId {
       const config = task.toConfiguration();
 
       if (!host.hasTaskExecutor(config.name)) {
@@ -277,14 +296,9 @@ export class SchematicEngine<CollectionT extends object, SchematicT extends obje
     collection: Collection<CollectionT, SchematicT>,
     allowPrivate = false,
   ): Schematic<CollectionT, SchematicT> {
-    const collectionImpl = this._collectionCache.get(collection.description.name);
-    const schematicMap = this._schematicCache.get(collection.description.name);
-    if (!collectionImpl || !schematicMap || collectionImpl !== collection) {
-      // This is weird, maybe the collection was created by another engine?
-      throw new UnknownCollectionException(collection.description.name);
-    }
+    const schematicMap = this._schematicCache.get(collection);
 
-    let schematic = schematicMap.get(name);
+    let schematic = schematicMap?.get(name);
     if (schematic) {
       return schematic;
     }
@@ -314,7 +328,7 @@ export class SchematicEngine<CollectionT extends object, SchematicT extends obje
     const factory = this._host.getSchematicRuleFactory(description, collectionDescription);
     schematic = new SchematicImpl<CollectionT, SchematicT>(description, factory, collection, this);
 
-    schematicMap.set(name, schematic);
+    schematicMap?.set(name, schematic);
 
     return schematic;
   }
@@ -342,8 +356,10 @@ export class SchematicEngine<CollectionT extends object, SchematicT extends obje
 
   createSourceFromUrl(url: Url, context: TypedSchematicContext<CollectionT, SchematicT>): Source {
     switch (url.protocol) {
-      case 'null:': return () => new NullTree();
-      case 'empty:': return () => empty();
+      case 'null:':
+        return () => new NullTree();
+      case 'empty:':
+        return () => empty();
       default:
         const hostSource = this._host.createSourceFromUrl(url, context);
         if (!hostSource) {
@@ -357,25 +373,25 @@ export class SchematicEngine<CollectionT extends object, SchematicT extends obje
   executePostTasks(): Observable<void> {
     const executors = new Map<string, TaskExecutor>();
 
-    const taskObservable = observableFrom(this._taskSchedulers)
-      .pipe(
-        concatMap(scheduler => scheduler.finalize()),
-        concatMap(task => {
-          const { name, options } = task.configuration;
+    const taskObservable = observableFrom(this._taskSchedulers).pipe(
+      concatMap((scheduler) => scheduler.finalize()),
+      concatMap((task) => {
+        const { name, options } = task.configuration;
 
-          const executor = executors.get(name);
-          if (executor) {
+        const executor = executors.get(name);
+        if (executor) {
+          return executor(options, task.context);
+        }
+
+        return this._host.createTaskExecutor(name).pipe(
+          concatMap((executor) => {
+            executors.set(name, executor);
+
             return executor(options, task.context);
-          }
-
-          return this._host.createTaskExecutor(name)
-            .pipe(concatMap(executor => {
-              executors.set(name, executor);
-
-              return executor(options, task.context);
-            }));
-        }),
-      );
+          }),
+        );
+      }),
+    );
 
     return taskObservable;
   }

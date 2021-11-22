@@ -1,18 +1,13 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-import {
-  JsonAstArray,
-  JsonAstKeyValue,
-  JsonAstNode,
-  JsonAstObject,
-  JsonObject,
-  JsonValue,
-} from '../../json';
+
+import { JsonObject, JsonValue } from '../../json';
+import { JsonAstArray, JsonAstKeyValue, JsonAstNode, JsonAstObject } from '../../json/parser_ast';
 
 const stableStringify = require('fast-json-stable-stringify');
 
@@ -37,12 +32,16 @@ type ChangeReporter = (
   current?: JsonValue,
 ) => void;
 
+// lib.es5 PropertyKey is string | number | symbol which doesn't overlap ProxyHandler PropertyKey which is string | symbol.
+// See https://github.com/microsoft/TypeScript/issues/42894
+type ProxyPropertyKey = string | symbol;
+
 function findNode(
   parent: JsonAstArray | JsonAstObject,
-  p: PropertyKey,
+  p: ProxyPropertyKey,
 ): { node?: JsonAstNode; parent: JsonAstArray | JsonAstKeyValue | JsonAstObject } {
   if (parent.kind === 'object') {
-    const entry = parent.properties.find(entry => entry.key.value === p);
+    const entry = parent.properties.find((entry) => entry.key.value === p);
     if (entry) {
       return { node: entry.value, parent: entry };
     }
@@ -97,12 +96,7 @@ export function createVirtualAstObject<T extends object = JsonObject>(
       }
 
       const op = old === undefined ? 'add' : current === undefined ? 'remove' : 'replace';
-      options.listener(
-        op,
-        path,
-        parent,
-        current,
-      );
+      options.listener(op, path, parent, current);
     }
   };
 
@@ -120,8 +114,8 @@ function create(
   ast: JsonAstObject | JsonAstArray,
   path: string,
   reporter: ChangeReporter,
-  excluded = new Set<PropertyKey>(),
-  included?: Set<PropertyKey>,
+  excluded = new Set<ProxyPropertyKey>(),
+  included?: Set<ProxyPropertyKey>,
   base?: object,
 ) {
   const cache = new Map<string, CacheEntry>();
@@ -137,7 +131,7 @@ function create(
   }
 
   return new Proxy(base, {
-    getOwnPropertyDescriptor(target: {}, p: PropertyKey): PropertyDescriptor | undefined {
+    getOwnPropertyDescriptor(target: {}, p: ProxyPropertyKey): PropertyDescriptor | undefined {
       const descriptor = Reflect.getOwnPropertyDescriptor(target, p);
       if (descriptor || typeof p === 'symbol') {
         return descriptor;
@@ -148,7 +142,7 @@ function create(
       const propertyPath = path + '/' + escapeKey(p);
       const cacheEntry = cache.get(propertyPath);
       if (cacheEntry) {
-        if (cacheEntry.value) {
+        if (cacheEntry.value !== undefined) {
           return createPropertyDescriptor(cacheEntry.value);
         }
 
@@ -162,7 +156,7 @@ function create(
 
       return undefined;
     },
-    has(target: {}, p: PropertyKey): boolean {
+    has(target: {}, p: ProxyPropertyKey): boolean {
       if (Reflect.has(target, p)) {
         return true;
       } else if (typeof p === 'symbol' || excluded.has(p)) {
@@ -171,7 +165,7 @@ function create(
 
       return cache.has(path + '/' + escapeKey(p)) || findNode(ast, p) !== undefined;
     },
-    get(target: {}, p: PropertyKey): unknown {
+    get(target: {}, p: ProxyPropertyKey): unknown {
       if (typeof p === 'symbol' || Reflect.has(target, p)) {
         return Reflect.get(target, p);
       } else if (excluded.has(p) || (included && !included.has(p))) {
@@ -188,15 +182,11 @@ function create(
       let value;
       if (node) {
         if (node.kind === 'object' || node.kind === 'array') {
-          value = create(
-            node,
-            propertyPath,
-            (path, parent, vnode, old, current) => {
-              if (!alteredNodes.has(node)) {
-                reporter(path, parent, vnode, old, current);
-              }
-            },
-          );
+          value = create(node, propertyPath, (path, parent, vnode, old, current) => {
+            if (!alteredNodes.has(node)) {
+              reporter(path, parent, vnode, old, current);
+            }
+          });
         } else {
           value = node.value;
         }
@@ -206,7 +196,13 @@ function create(
 
       return value;
     },
-    set(target: {}, p: PropertyKey, value: unknown): boolean {
+    set(target: {}, p: ProxyPropertyKey, value: unknown): boolean {
+      if (value === undefined) {
+        // setting to undefined is equivalent to a delete
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        return this.deleteProperty!(target, p);
+      }
+
       if (typeof p === 'symbol' || Reflect.has(target, p)) {
         return Reflect.set(target, p, value);
       } else if (excluded.has(p) || (included && !included.has(p))) {
@@ -236,7 +232,7 @@ function create(
 
       return true;
     },
-    deleteProperty(target: {}, p: PropertyKey): boolean {
+    deleteProperty(target: {}, p: ProxyPropertyKey): boolean {
       if (typeof p === 'symbol' || Reflect.has(target, p)) {
         return Reflect.deleteProperty(target, p);
       } else if (excluded.has(p) || (included && !included.has(p))) {
@@ -251,31 +247,41 @@ function create(
         if (cacheEntry.node) {
           alteredNodes.add(cacheEntry.node);
         }
-        reporter(propertyPath, cacheEntry.parent, cacheEntry.node, oldValue, undefined);
+        if (cacheEntry.parent.kind === 'keyvalue') {
+          // Remove the entire key/value pair from this JSON object
+          reporter(propertyPath, ast, cacheEntry.node, oldValue, undefined);
+        } else {
+          reporter(propertyPath, cacheEntry.parent, cacheEntry.node, oldValue, undefined);
+        }
       } else {
         const { node, parent } = findNode(ast, p);
         if (node) {
           cache.set(propertyPath, { node, parent, value: undefined });
           alteredNodes.add(node);
-          reporter(propertyPath, parent, node, node && node.value, undefined);
+          if (parent.kind === 'keyvalue') {
+            // Remove the entire key/value pair from this JSON object
+            reporter(propertyPath, ast, node, node && node.value, undefined);
+          } else {
+            reporter(propertyPath, parent, node, node && node.value, undefined);
+          }
         }
       }
 
       return true;
     },
-    defineProperty(target: {}, p: PropertyKey, attributes: PropertyDescriptor): boolean {
+    defineProperty(target: {}, p: ProxyPropertyKey, attributes: PropertyDescriptor): boolean {
       if (typeof p === 'symbol') {
         return Reflect.defineProperty(target, p, attributes);
       }
 
       return false;
     },
-    ownKeys(target: {}): PropertyKey[] {
-      let keys: PropertyKey[];
+    ownKeys(target: {}): ProxyPropertyKey[] {
+      let keys: ProxyPropertyKey[];
       if (ast.kind === 'object') {
         keys = ast.properties
-          .map(entry => entry.key.value)
-          .filter(p => !excluded.has(p) && (!included || included.has(p)));
+          .map((entry) => entry.key.value)
+          .filter((p) => !excluded.has(p) && (!included || included.has(p)));
       } else {
         keys = [];
       }
@@ -283,7 +289,7 @@ function create(
       for (const key of cache.keys()) {
         const relativeKey = key.substr(path.length + 1);
         if (relativeKey.length > 0 && !relativeKey.includes('/')) {
-          keys.push(unescapeKey(relativeKey));
+          keys.push(`${unescapeKey(relativeKey)}`);
         }
       }
 

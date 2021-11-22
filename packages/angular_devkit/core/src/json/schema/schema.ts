@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-import { clean } from '../../utils';
-import { JsonObject, isJsonObject } from '../interface';
+
+import { JsonObject, JsonValue, isJsonObject } from '../utils';
 
 /**
  * A specialized interface for JsonSchema (to come). JsonSchemas are also JsonObject.
@@ -15,11 +15,8 @@ import { JsonObject, isJsonObject } from '../interface';
  */
 export type JsonSchema = JsonObject | boolean;
 
-
-// TODO: this should be unknown
-// tslint:disable-next-line:no-any
-export function isJsonSchema(value: any): value is JsonSchema {
-  return isJsonObject(value) || value === false || value === true;
+export function isJsonSchema(value: unknown): value is JsonSchema {
+  return isJsonObject(value as JsonValue) || value === false || value === true;
 }
 
 /**
@@ -29,7 +26,11 @@ export function isJsonSchema(value: any): value is JsonSchema {
  * @param schemas All schemas to be merged.
  */
 export function mergeSchemas(...schemas: (JsonSchema | undefined)[]): JsonSchema {
-  return clean(schemas).reduce((prev, curr) => {
+  return schemas.reduce<JsonSchema>((prev, curr) => {
+    if (curr === undefined) {
+      return prev;
+    }
+
     if (prev === false || curr === false) {
       return false;
     } else if (prev === true) {
@@ -47,5 +48,5 @@ export function mergeSchemas(...schemas: (JsonSchema | undefined)[]): JsonSchema
     } else {
       return { ...prev, allOf: [prev, curr] };
     }
-  }, true as JsonSchema);
+  }, true);
 }

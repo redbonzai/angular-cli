@@ -1,33 +1,33 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
 import { Observable, concat, from, isObservable, of as observableOf } from 'rxjs';
 import { concatMap, ignoreElements, mergeMap, tap } from 'rxjs/operators';
-import { JsonArray, JsonObject, JsonValue } from '../interface';
+import { JsonArray, JsonObject, JsonValue } from '../utils';
 import { JsonPointer, JsonSchemaVisitor, JsonVisitor } from './interface';
 import { buildJsonPointer, joinJsonPointer } from './pointer';
 import { JsonSchema } from './schema';
 
 export interface ReferenceResolver<ContextT> {
-  (ref: string, context?: ContextT): { context?: ContextT, schema?: JsonObject };
+  (ref: string, context?: ContextT): { context?: ContextT; schema?: JsonObject };
 }
 
-function _getObjectSubSchema(
-  schema: JsonSchema | undefined,
-  key: string,
-): JsonObject | undefined {
+function _getObjectSubSchema(schema: JsonSchema | undefined, key: string): JsonObject | undefined {
   if (typeof schema !== 'object' || schema === null) {
     return undefined;
   }
 
   // Is it an object schema?
   if (typeof schema.properties == 'object' || schema.type == 'object') {
-    if (typeof schema.properties == 'object'
-        && typeof (schema.properties as JsonObject)[key] == 'object') {
+    if (
+      typeof schema.properties == 'object' &&
+      typeof (schema.properties as JsonObject)[key] == 'object'
+    ) {
       return (schema.properties as JsonObject)[key] as JsonObject;
     }
     if (typeof schema.additionalProperties == 'object') {
@@ -51,25 +51,26 @@ function _visitJsonRecursive<ContextT>(
   ptr: JsonPointer,
   schema?: JsonSchema,
   refResolver?: ReferenceResolver<ContextT>,
-  context?: ContextT,  // tslint:disable-line:no-any
+  context?: ContextT,
   root?: JsonObject | JsonArray,
 ): Observable<JsonValue> {
   if (schema === true || schema === false) {
     // There's no schema definition, so just visit the JSON recursively.
     schema = undefined;
   }
+  // eslint-disable-next-line no-prototype-builtins
   if (schema && schema.hasOwnProperty('$ref') && typeof schema['$ref'] == 'string') {
     if (refResolver) {
-      const resolved = refResolver(schema['$ref'] as string, context);
+      const resolved = refResolver(schema['$ref'], context);
       schema = resolved.schema;
       context = resolved.context;
     }
   }
 
-  const value = visitor(json, ptr, schema, root);
+  const value = visitor(json, ptr, schema as JsonObject, root);
 
   return (isObservable<JsonValue>(value) ? value : observableOf(value)).pipe(
-    concatMap(value => {
+    concatMap((value) => {
       if (Array.isArray(value)) {
         return concat(
           from(value).pipe(
@@ -82,7 +83,7 @@ function _visitJsonRecursive<ContextT>(
                 refResolver,
                 context,
                 root || value,
-              ).pipe(tap<JsonValue>(x => value[i] = x));
+              ).pipe(tap<JsonValue>((x) => (value[i] = x)));
             }),
             ignoreElements(),
           ),
@@ -91,7 +92,7 @@ function _visitJsonRecursive<ContextT>(
       } else if (typeof value == 'object' && value !== null) {
         return concat(
           from(Object.getOwnPropertyNames(value)).pipe(
-            mergeMap(key => {
+            mergeMap((key) => {
               return _visitJsonRecursive(
                 value[key],
                 visitor,
@@ -100,11 +101,18 @@ function _visitJsonRecursive<ContextT>(
                 refResolver,
                 context,
                 root || value,
-              ).pipe(tap<JsonValue>(x => value[key] = x));
+              ).pipe(
+                tap<JsonValue>((x) => {
+                  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+                  if (descriptor && descriptor.writable && value[key] !== x) {
+                    value[key] = x;
+                  }
+                }),
+              );
             }),
             ignoreElements(),
-           ),
-           observableOf(value),
+          ),
+          observableOf(value),
         );
       } else {
         return observableOf(value);
@@ -133,11 +141,10 @@ export function visitJson<ContextT>(
   visitor: JsonVisitor,
   schema?: JsonSchema,
   refResolver?: ReferenceResolver<ContextT>,
-  context?: ContextT,  // tslint:disable-line:no-any
+  context?: ContextT,
 ): Observable<JsonValue> {
   return _visitJsonRecursive(json, visitor, buildJsonPointer([]), schema, refResolver, context);
 }
-
 
 export function visitJsonSchema(schema: JsonSchema, visitor: JsonSchemaVisitor) {
   if (schema === false || schema === true) {

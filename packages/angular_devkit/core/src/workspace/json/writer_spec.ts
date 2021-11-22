@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-// tslint:disable:no-big-function
+
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { JsonArray, JsonObject } from '../../json';
@@ -30,7 +30,7 @@ const basicFile = stripIndent`
   "x-bar": 5,
 }`;
 
-const representativeFile = readFileSync(__dirname + '/test/angular.json', 'utf8');
+const representativeFile = readFileSync(require.resolve(__dirname + '/test/angular.json'), 'utf8');
 
 function createTestCaseHost(inputData = '') {
   const host = {
@@ -39,7 +39,10 @@ function createTestCaseHost(inputData = '') {
     },
     async writeFile(path: string, data: string) {
       try {
-        const testCase = readFileSync(join(__dirname, 'test', 'cases', path) + '.json', 'utf8');
+        const testCase = readFileSync(
+          require.resolve(join(__dirname, 'test', 'cases', path) + '.json'),
+          'utf8',
+        );
         expect(data).toEqual(testCase);
       } catch (e) {
         fail(`Unable to load test case '${path}': ${e.message || e}`);
@@ -59,7 +62,7 @@ function createTestCaseHost(inputData = '') {
 describe('writeJsonWorkpaceFile', () => {
   it('does not modify a file without changes', async () => {
     const host = {
-      async readFile(path: string) {
+      async readFile() {
         return representativeFile;
       },
       async writeFile() {
@@ -273,7 +276,7 @@ describe('writeJsonWorkpaceFile', () => {
     await writeJsonWorkspace(workspace, host, 'AddProjectWithTargets');
   });
 
-  it('modifies a project\'s properties', async () => {
+  it("modifies a project's properties", async () => {
     const host = createTestCaseHost(representativeFile);
 
     const workspace = await readJsonWorkspace('', host);
@@ -290,7 +293,7 @@ describe('writeJsonWorkpaceFile', () => {
     await writeJsonWorkspace(workspace, host, 'ProjectModifyProperties');
   });
 
-  it('sets a project\'s properties', async () => {
+  it("sets a project's properties", async () => {
     const host = createTestCaseHost(representativeFile);
 
     const workspace = await readJsonWorkspace('', host);
@@ -577,7 +580,7 @@ describe('writeJsonWorkpaceFile', () => {
 
     const workspace = await readJsonWorkspace('', host);
 
-    workspace.extensions['x-foo'] = { };
+    workspace.extensions['x-foo'] = {};
 
     await writeJsonWorkspace(workspace, host, 'ObjectReplace2');
   });
@@ -590,5 +593,36 @@ describe('writeJsonWorkpaceFile', () => {
     workspace.extensions['x-foo'] = null;
 
     await writeJsonWorkspace(workspace, host, 'ObjectReplace3');
+  });
+
+  it('removes a property when property value is set to undefined', async () => {
+    const host = createTestCaseHost(basicFile);
+
+    const workspace = await readJsonWorkspace('', host);
+
+    workspace.extensions['x-baz'] = undefined;
+
+    await writeJsonWorkspace(workspace, host, 'ObjectRemove');
+  });
+
+  it('removes a property when using delete operator', async () => {
+    const host = createTestCaseHost(basicFile);
+
+    const workspace = await readJsonWorkspace('', host);
+
+    delete workspace.extensions['x-baz'];
+
+    await writeJsonWorkspace(workspace, host, 'ObjectRemove');
+  });
+
+  it('removes multiple properties when using delete operator', async () => {
+    const host = createTestCaseHost(basicFile);
+
+    const workspace = await readJsonWorkspace('', host);
+
+    delete workspace.extensions['x-baz'];
+    delete workspace.extensions.schematics;
+
+    await writeJsonWorkspace(workspace, host, 'ObjectRemoveMultiple');
   });
 });

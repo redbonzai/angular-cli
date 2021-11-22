@@ -1,71 +1,59 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
 
-// tslint:disable:no-global-tslint-disable no-any
 import { normalize } from '@angular-devkit/core';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { CommandWorkspace } from '../models/interface';
 import { findUp } from './find-up';
 
-export function insideWorkspace(): boolean {
-  return getWorkspaceDetails() !== null;
-}
-
-export function getWorkspaceDetails(): CommandWorkspace | null {
-  const currentDir = process.cwd();
+export function findWorkspaceFile(currentDirectory = process.cwd()): string | null {
   const possibleConfigFiles = [
     'angular.json',
     '.angular.json',
     'angular-cli.json',
     '.angular-cli.json',
   ];
-  const configFilePath = findUp(possibleConfigFiles, currentDir);
+  const configFilePath = findUp(possibleConfigFiles, currentDirectory);
   if (configFilePath === null) {
     return null;
   }
-  const configFileName = path.basename(configFilePath);
 
   const possibleDir = path.dirname(configFilePath);
 
   const homedir = os.homedir();
   if (normalize(possibleDir) === normalize(homedir)) {
     const packageJsonPath = path.join(possibleDir, 'package.json');
-    if (!fs.existsSync(packageJsonPath)) {
-      // No package.json
-      return null;
-    }
-    const packageJsonBuffer = fs.readFileSync(packageJsonPath);
-    const packageJsonText = packageJsonBuffer === null ? '{}' : packageJsonBuffer.toString();
-    const packageJson = JSON.parse(packageJsonText);
-    if (!containsCliDep(packageJson)) {
-      // No CLI dependency
+
+    try {
+      const packageJsonText = fs.readFileSync(packageJsonPath, 'utf-8');
+      const packageJson = JSON.parse(packageJsonText);
+      if (!containsCliDep(packageJson)) {
+        // No CLI dependency
+        return null;
+      }
+    } catch {
+      // No or invalid package.json
       return null;
     }
   }
 
-  return {
-    root: possibleDir,
-    configFile: configFileName,
-  };
+  return configFilePath;
 }
 
-function containsCliDep(obj: any): boolean {
+function containsCliDep(obj?: {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+}): boolean {
   const pkgName = '@angular/cli';
-  if (obj) {
-    if (obj.dependencies && obj.dependencies[pkgName]) {
-      return true;
-    }
-    if (obj.devDependencies && obj.devDependencies[pkgName]) {
-      return true;
-    }
+  if (!obj) {
+    return false;
   }
 
-  return false;
+  return !!(obj.dependencies?.[pkgName] || obj.devDependencies?.[pkgName]);
 }

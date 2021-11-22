@@ -1,15 +1,19 @@
 /**
  * @license
- * Copyright Google Inc. All Rights Reserved.
+ * Copyright Google LLC All Rights Reserved.
  *
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
+
+import { promisify } from 'util';
 import { JobState } from './api';
 import { createJobHandler } from './create-job-handler';
 import { SimpleJobRegistry } from './simple-registry';
 import { SimpleScheduler } from './simple-scheduler';
 import { strategy } from './strategy';
+
+const flush = promisify(setImmediate);
 
 describe('strategy.serialize()', () => {
   let registry: SimpleJobRegistry;
@@ -24,40 +28,48 @@ describe('strategy.serialize()', () => {
     let started = 0;
     let finished = 0;
 
-    registry.register(strategy.serialize()(createJobHandler((input: number[]) => {
-      started++;
+    registry.register(
+      strategy.serialize()(
+        createJobHandler((input: number[]) => {
+          started++;
 
-      return new Promise<number>(
-        resolve => setTimeout(() => {
-          finished++;
-          resolve(input.reduce((a, c) => a + c, 0));
-        }, 10),
-      );
-    })), {
-      argument: { items: { type: 'number' } },
-      output: { type: 'number' },
-      name: 'add',
-    });
+          return new Promise<number>((resolve) =>
+            setTimeout(() => {
+              finished++;
+              resolve(input.reduce((a, c) => a + c, 0));
+            }, 10),
+          );
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+      ),
+      {
+        argument: { items: { type: 'number' } },
+        output: { type: 'number' },
+        name: 'add',
+      },
+    );
 
-    const job1 = await scheduler.schedule('add', [1, 2, 3, 4]);
-    const job2 = await scheduler.schedule('add', [1, 2, 3, 4, 5]);
+    const job1 = scheduler.schedule('add', [1, 2, 3, 4]);
+    const job2 = scheduler.schedule('add', [1, 2, 3, 4, 5]);
     expect(started).toBe(0);
     expect(finished).toBe(0);
 
     job1.output.subscribe();
+    await flush();
     expect(started).toBe(1);
 
     job2.output.subscribe();
-    expect(started).toBe(1);  // Job2 starts when Job1 ends.
+    await flush();
+    expect(started).toBe(1); // Job2 starts when Job1 ends.
 
     expect(finished).toBe(0);
 
     await Promise.all([
-      job1.output.toPromise().then(s => {
+      job1.output.toPromise().then((s) => {
         expect(finished).toBe(1);
         expect(s).toBe(10);
       }),
-      job2.output.toPromise().then(s => {
+      job2.output.toPromise().then((s) => {
         expect(finished).toBe(2);
         expect(s).toBe(15);
       }),
@@ -73,54 +85,68 @@ describe('strategy.serialize()', () => {
 
     const strategy1 = strategy.serialize();
 
-    registry.register(strategy1(createJobHandler((input: number[]) => {
-      started++;
+    registry.register(
+      strategy1(
+        createJobHandler((input: number[]) => {
+          started++;
 
-      return new Promise<number>(
-        resolve => setTimeout(() => {
-          finished++;
-          resolve(input.reduce((a, c) => a + c, 0));
-        }, 10),
-      );
-    })), {
-      argument: { items: { type: 'number' } },
-      output: { type: 'number' },
-      name: 'add',
-    });
-    registry.register(strategy1(createJobHandler((input: number[]) => {
-      started++;
+          return new Promise<number>((resolve) =>
+            setTimeout(() => {
+              finished++;
+              resolve(input.reduce((a, c) => a + c, 0));
+            }, 10),
+          );
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+      ),
+      {
+        argument: { items: { type: 'number' } },
+        output: { type: 'number' },
+        name: 'add',
+      },
+    );
+    registry.register(
+      strategy1(
+        createJobHandler((input: number[]) => {
+          started++;
 
-      return new Promise<number>(
-        resolve => setTimeout(() => {
-          finished++;
-          resolve(input.reduce((a, c) => a + c, 100));
-        }, 10),
-      );
-    })), {
-      argument: { items: { type: 'number' } },
-      output: { type: 'number' },
-      name: 'add100',
-    });
+          return new Promise<number>((resolve) =>
+            setTimeout(() => {
+              finished++;
+              resolve(input.reduce((a, c) => a + c, 100));
+            }, 10),
+          );
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+      ),
+      {
+        argument: { items: { type: 'number' } },
+        output: { type: 'number' },
+        name: 'add100',
+      },
+    );
 
-    const job1 = await scheduler.schedule('add', [1, 2, 3, 4]);
-    const job2 = await scheduler.schedule('add100', [1, 2, 3, 4, 5]);
+    const job1 = scheduler.schedule('add', [1, 2, 3, 4]);
+    const job2 = scheduler.schedule('add100', [1, 2, 3, 4, 5]);
     expect(started).toBe(0);
     expect(finished).toBe(0);
 
     job1.output.subscribe();
+    await flush();
     expect(started).toBe(1);
 
     job2.output.subscribe();
-    expect(started).toBe(1);  // Job2 starts when Job1 ends.
+    await flush();
+    expect(started).toBe(1); // Job2 starts when Job1 ends.
 
     expect(finished).toBe(0);
 
     await Promise.all([
-      job1.output.toPromise().then(s => {
+      job1.output.toPromise().then((s) => {
         expect(finished).toBe(1);
         expect(s).toBe(10);
       }),
-      job2.output.toPromise().then(s => {
+      job2.output.toPromise().then((s) => {
         expect(finished).toBe(2);
         expect(s).toBe(115);
       }),
@@ -144,32 +170,39 @@ describe('strategy.reuse()', () => {
     let started = 0;
     let finished = 0;
 
-    registry.register(strategy.reuse()(createJobHandler((input: number[]) => {
-      started++;
+    registry.register(
+      strategy.reuse()(
+        createJobHandler((input: number[]) => {
+          started++;
 
-      return new Promise<number>(
-        resolve => setTimeout(() => {
-          finished++;
-          resolve(input.reduce((a, c) => a + c, 0));
-        }, 10),
-      );
-    })), {
-      argument: { items: { type: 'number' } },
-      output: { type: 'number' },
-      name: 'add',
-    });
+          return new Promise<number>((resolve) =>
+            setTimeout(() => {
+              finished++;
+              resolve(input.reduce((a, c) => a + c, 0));
+            }, 10),
+          );
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+      ),
+      {
+        argument: { items: { type: 'number' } },
+        output: { type: 'number' },
+        name: 'add',
+      },
+    );
 
-    const job1 = await scheduler.schedule('add', [1, 2, 3, 4]);
-    const job2 = await scheduler.schedule('add', []);
+    const job1 = scheduler.schedule('add', [1, 2, 3, 4]);
+    const job2 = scheduler.schedule('add', []);
     expect(started).toBe(0);
     expect(finished).toBe(0);
 
     job1.output.subscribe();
+    await flush();
     expect(started).toBe(1);
     expect(finished).toBe(0);
 
     job2.output.subscribe();
-    expect(started).toBe(1);  // job2 is reusing job1.
+    expect(started).toBe(1); // job2 is reusing job1.
     expect(finished).toBe(0);
 
     let result = await job1.output.toPromise();
@@ -179,14 +212,15 @@ describe('strategy.reuse()', () => {
     expect(job1.state).toBe(JobState.Ended);
     expect(job2.state).toBe(JobState.Ended);
 
-    const job3 = await scheduler.schedule('add', [1, 2, 3, 4, 5]);
-    const job4 = await scheduler.schedule('add', []);
+    const job3 = scheduler.schedule('add', [1, 2, 3, 4, 5]);
+    const job4 = scheduler.schedule('add', []);
     job3.output.subscribe();
+    await flush();
     expect(started).toBe(2);
     expect(finished).toBe(1);
 
     job4.output.subscribe();
-    expect(started).toBe(2);  // job4 is reusing job3.
+    expect(started).toBe(2); // job4 is reusing job3.
     expect(finished).toBe(1);
 
     result = await job3.output.toPromise();
@@ -211,63 +245,71 @@ describe('strategy.memoize()', () => {
     let started = 0;
     let finished = 0;
 
-    registry.register(strategy.memoize()(createJobHandler((input: number[]) => {
-      started++;
+    registry.register(
+      strategy.memoize()(
+        createJobHandler((input: number[]) => {
+          started++;
 
-      return new Promise<number>(
-        resolve => setTimeout(() => {
-          finished++;
-          resolve(input.reduce((a, c) => a + c, 0));
-        }, 10),
-      );
-    })), {
-      argument: { items: { type: 'number' } },
-      output: { type: 'number' },
-      name: 'add',
-    });
+          return new Promise<number>((resolve) =>
+            setTimeout(() => {
+              finished++;
+              resolve(input.reduce((a, c) => a + c, 0));
+            }, 10),
+          );
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+      ),
+      {
+        argument: { items: { type: 'number' } },
+        output: { type: 'number' },
+        name: 'add',
+      },
+    );
 
-    const job1 = await scheduler.schedule('add', [1, 2, 3, 4]);
-    const job2 = await scheduler.schedule('add', [1, 2, 3, 4]);
-    const job3 = await scheduler.schedule('add', [1, 2, 3, 4, 5]);
-    const job4 = await scheduler.schedule('add', [1, 2, 3, 4, 5]);
+    const job1 = scheduler.schedule('add', [1, 2, 3, 4]);
+    const job2 = scheduler.schedule('add', [1, 2, 3, 4]);
+    const job3 = scheduler.schedule('add', [1, 2, 3, 4, 5]);
+    const job4 = scheduler.schedule('add', [1, 2, 3, 4, 5]);
     expect(started).toBe(0);
     expect(finished).toBe(0);
 
     job1.output.subscribe();
+    await flush();
     expect(started).toBe(1);
     expect(finished).toBe(0);
 
     job2.output.subscribe();
-    expect(started).toBe(1);  // job2 is reusing job1.
+    expect(started).toBe(1); // job2 is reusing job1.
     expect(finished).toBe(0);
 
     job3.output.subscribe();
+    await flush();
     expect(started).toBe(2);
     expect(finished).toBe(0);
 
     job4.output.subscribe();
-    expect(started).toBe(2);  // job4 is reusing job3.
+    expect(started).toBe(2); // job4 is reusing job3.
     expect(finished).toBe(0);
 
     await Promise.all([
-      job1.output.toPromise().then(s => {
+      job1.output.toPromise().then((s) => {
         // This is hard since job3 and job1 might finish out of order.
         expect(finished).toBeGreaterThanOrEqual(1);
         expect(s).toBe(10);
       }),
-      job2.output.toPromise().then(s => {
+      job2.output.toPromise().then((s) => {
         // This is hard since job3 and job1 might finish out of order.
         expect(finished).toBeGreaterThanOrEqual(1);
         expect(job1.state).toBe(JobState.Ended);
         expect(job2.state).toBe(JobState.Ended);
         expect(s).toBe(10);
       }),
-      job3.output.toPromise().then(s => {
+      job3.output.toPromise().then((s) => {
         // This is hard since job3 and job1 might finish out of order.
         expect(finished).toBeGreaterThanOrEqual(1);
         expect(s).toBe(15);
       }),
-      job4.output.toPromise().then(s => {
+      job4.output.toPromise().then((s) => {
         expect(job3.state).toBe(JobState.Ended);
         expect(job4.state).toBe(JobState.Ended);
         // This is hard since job3 and job1 might finish out of order.

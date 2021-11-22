@@ -26,8 +26,8 @@ should be tagged with tag `angular-cli` or `angular-devkit`.
 
 StackOverflow is a much better place to ask questions since:
 
-- there are thousands of people willing to help on StackOverflow
-- questions and answers stay available for public viewing so your question / answer might help someone else
+- There are thousands of people willing to help on StackOverflow.
+- Questions and answers stay available for public viewing so your question / answer might help someone else.
 - StackOverflow's voting system assures that the best answers are prominently visible.
 
 To save your and our time we will be systematically closing all the issues that are requests for
@@ -106,18 +106,25 @@ Before you submit your Pull Request (PR) consider the following guidelines:
     git push origin my-fix-branch
     ```
 
-* In GitHub, send a pull request to `devkit:master`.
+* In GitHub, send a pull request to `angular/angular-cli:master`.
 * If we suggest changes then:
   * Make the required updates.
   * Re-run the Angular DevKit test suites to ensure tests are still passing.
-  * Rebase your branch and force push to your GitHub repository (this will update your Pull Request):
+* Once your PR is approved and you are done with any follow up changes:
+  * Rebase to the current master to pre-emptively address any merge conflicts.
 
     ```shell
     git rebase master -i
     git push -f
     ```
+  * Add the `action: merge` label and the correct
+[target label](https://github.com/angular/angular/blob/master/docs/TRIAGE_AND_LABELS.md#pr-target)
+    (if PR author has the project collaborator status, or else the last reviewer
+    should do this).
+  * The current caretaker will merge the PR to the target branch(es) within 1-2
+    business days.
 
-That's it! Thank you for your contribution!
+That's it! 🎉 Thank you for your contribution!
 
 #### After your pull request is merged
 
@@ -185,16 +192,15 @@ If the commit reverts a previous commit, it should begin with `revert: `, follow
 ### Type
 Must be one of the following:
 
-* **build**: Changes that affect the build system or external dependencies. [2]
-* **ci**: Changes to our CI configuration files and scripts. [2]
-* **docs**: Documentation only changes. 
-* **feat**: A new feature. [1]
-* **fix**: A bug fix. [1]
-* **refactor**: A code change that neither fixes a bug nor adds a feature 
-* **release**: A release commit. Must only include version changes. [2]
-* **revert**: A git commit revert. The description must include the original commit message. [2]
-* **style**: Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc). 
-* **test**: Adding missing tests or correcting existing tests. 
+* **build**: Changes to local repository build system and tooling 
+* **ci**: Changes to CI configuration and CI specific tooling [2]
+* **docs**: Changes which exclusively affects documentation. 
+* **feat**: Creates a new feature [1]
+* **fix**: Fixes a previously discovered failure/bug [1]
+* **perf**: Improves performance without any change in functionality or API [1]
+* **refactor**: Refactor without any change in functionality or API (includes style changes) 
+* **release**: A release point in the repository [2]
+* **test**: Improvements or corrections made to the project's test suite 
 
 
 <sup>[1] This type MUST have a scope. See the next section for more information.</sup><br/>
@@ -209,8 +215,8 @@ The following is the list of supported scopes:
 * **@angular/pwa**
 * **@angular-devkit/architect**
 * **@angular-devkit/architect-cli**
+* **@angular-devkit/benchmark**
 * **@angular-devkit/build-angular**
-* **@angular-devkit/build-ng-packagr**
 * **@angular-devkit/build-optimizer**
 * **@angular-devkit/build-webpack**
 * **@angular-devkit/core**
@@ -218,8 +224,6 @@ The following is the list of supported scopes:
 * **@angular-devkit/schematics-cli**
 * **@ngtools/webpack**
 * **@schematics/angular**
-* **@schematics/schematics**
-* **@schematics/update**
 
 
 ### Subject
@@ -249,12 +253,32 @@ Just as in the **subject**, use the imperative, present tense: "change" not "cha
 The body should include the motivation for the change and contrast this with previous behavior.
 
 ### Footer
-The footer should contain any information about **Breaking Changes** and is also the place to
-reference GitHub issues that this commit **Closes**.
+The footer can contain information about breaking changes and deprecations. It is also the place to reference GitHub issues, Jira tickets, and other PRs that are related to this commit or that this commit will close.
+For example:
 
-**Breaking Changes** should start with the word `BREAKING CHANGE:` with a space or two newlines. The rest of the commit message is then used for this.
+```
+BREAKING CHANGE: <breaking change summary>
+<BLANK LINE>
+<breaking change description + migration instructions>
+<BLANK LINE>
+<BLANK LINE>
+Fixes #<issue number>
+```
 
-A detailed explanation can be found in this [document][commit-message-format].
+or
+
+```
+DEPRECATED: <what is deprecated>
+<BLANK LINE>
+<deprecation description + recommended update path>
+<BLANK LINE>
+<BLANK LINE>
+Closes #<pr number>
+```
+
+Breaking Change section should start with the phrase "BREAKING CHANGE: " followed by a summary of the breaking change, a blank line, and a detailed description of the breaking change that also includes migration instructions.
+
+Similarly, a Deprecation section should start with "DEPRECATED: " followed by a short description of what is deprecated, a blank line, and a detailed description of the deprecation that also mentions the recommended update path.
 
 ## <a name="cla"></a> Signing the CLA
 
@@ -277,36 +301,14 @@ changes to be accepted, the CLA must be signed. It's a quick process, we promise
 [stackoverflow]: http://stackoverflow.com/questions/tagged/angular-devkit
 
 ## <a name="public-api"></a> Updating the Public API
-Our Public API is protected with TS API Guardian. This is a tool that keeps track of public API surface of our packages.
+Our Public API surface is tracked using golden files.
 
-To test if your change effect the public API you need to run the API guardian on that particular package.
-
-For example in case `@angular-devkit/core` package was modified you need to run:
-
+You check all golden files by running:
 ```bash
-yarn bazel test //etc/api:angular_devkit_core_api
-```
-
-You can also test all packages by running:
-```bash
-yarn bazel test //etc/api ...
+yarn public-api:check
 ```
 
 If you modified the public API, the test will fail. To update the golden files you need to run:
-
 ```bash
-yarn bazel run //etc/api:angular_devkit_core_api.accept
+yarn public-api:update
 ```
-
-**Note**: In some cases we use aliased symbols to create namespaces.
-
-Example:
-```javascript 
-import * as foo from './foo';
-
-export { foo };
-```
-There are currently not supported by the API guardian. 
-To overcome this limitation we created `_golden-api.ts` in certain packages.
-
-When adding a new API, it might be the case that you need to add it to `_golden-api.ts`.
