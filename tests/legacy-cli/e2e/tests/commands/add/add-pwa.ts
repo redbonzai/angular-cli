@@ -44,16 +44,15 @@ export default async function () {
   }
 
   // It should generate a SW configuration file (`ngsw.json`).
-  const workspaceJson = JSON.parse(await readFile('angular.json'));
-  const outputPath = workspaceJson.projects['test-project'].architect.build.options.outputPath;
-  const ngswPath = join(process.cwd(), outputPath, 'ngsw.json');
+  const ngswPath = 'dist/test-project/browser/ngsw.json';
 
   await ng('build');
   await expectFileToExist(ngswPath);
 
   // It should correctly generate assetGroups and include at least one URL in each group.
   const ngswJson = JSON.parse(await readFile(ngswPath));
-  const assetGroups = ngswJson.assetGroups.map(({ name, urls }) => ({
+  // @ts-ignore
+  const assetGroups: any[] = ngswJson.assetGroups.map(({ name, urls }) => ({
     name,
     urlCount: urls.length,
   }));

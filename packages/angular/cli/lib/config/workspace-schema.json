@@ -20,10 +20,6 @@
       "type": "string",
       "description": "Path where new projects will be created."
     },
-    "defaultProject": {
-      "type": "string",
-      "description": "Default project name used in commands."
-    },
     "projects": {
       "type": "object",
       "patternProperties": {
@@ -40,9 +36,13 @@
     "cliOptions": {
       "type": "object",
       "properties": {
-        "defaultCollection": {
-          "description": "The default schematics collection to use.",
-          "type": "string"
+        "schematicCollections": {
+          "type": "array",
+          "description": "The list of schematic collections to use.",
+          "items": {
+            "type": "string",
+            "uniqueItems": true
+          }
         },
         "packageManager": {
           "description": "Specify which package manager tool to use.",
@@ -57,26 +57,12 @@
               "description": "Show a warning when the global version is newer than the local one.",
               "type": "boolean"
             }
-          }
+          },
+          "additionalProperties": false
         },
         "analytics": {
           "type": ["boolean", "string"],
-          "description": "Share anonymous usage data with the Angular Team at Google."
-        },
-        "analyticsSharing": {
-          "type": "object",
-          "properties": {
-            "tracking": {
-              "description": "Analytics sharing info tracking ID.",
-              "type": "string",
-              "pattern": "^(GA|UA)?-\\d+-\\d+$"
-            },
-            "uuid": {
-              "description": "Analytics sharing info universally unique identifier.",
-              "type": "string",
-              "format": "uuid"
-            }
-          }
+          "description": "Share pseudonymous usage data with the Angular Team at Google."
         },
         "cache": {
           "description": "Control disk cache.",
@@ -95,7 +81,53 @@
               "description": "Cache base path.",
               "type": "string"
             }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "cliGlobalOptions": {
+      "type": "object",
+      "properties": {
+        "schematicCollections": {
+          "type": "array",
+          "description": "The list of schematic collections to use.",
+          "items": {
+            "type": "string",
+            "uniqueItems": true
           }
+        },
+        "packageManager": {
+          "description": "Specify which package manager tool to use.",
+          "type": "string",
+          "enum": ["npm", "cnpm", "yarn", "pnpm"]
+        },
+        "warnings": {
+          "description": "Control CLI specific console warnings",
+          "type": "object",
+          "properties": {
+            "versionMismatch": {
+              "description": "Show a warning when the global version is newer than the local one.",
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "analytics": {
+          "type": ["boolean", "string"],
+          "description": "Share pseudonymous usage data with the Angular Team at Google."
+        },
+        "completion": {
+          "type": "object",
+          "description": "Angular CLI completion settings.",
+          "properties": {
+            "prompted": {
+              "type": "boolean",
+              "description": "Whether the user has been prompted to add completion command prompt."
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -146,9 +178,7 @@
           "$ref": "../../../../schematics/angular/web-worker/schema.json"
         }
       },
-      "additionalProperties": {
-        "type": "object"
-      }
+      "additionalProperties": true
     },
     "fileVersion": {
       "type": "integer",
@@ -159,9 +189,13 @@
       "type": "object",
       "properties": {
         "cli": {
-          "defaultCollection": {
-            "description": "The default schematics collection to use.",
-            "type": "string"
+          "schematicCollections": {
+            "type": "array",
+            "description": "The list of schematic collections to use.",
+            "items": {
+              "type": "string",
+              "uniqueItems": true
+            }
           }
         },
         "schematics": {
@@ -320,11 +354,14 @@
                   "description": "The builder used for this package.",
                   "not": {
                     "enum": [
+                      "@angular-devkit/build-angular:application",
                       "@angular-devkit/build-angular:app-shell",
                       "@angular-devkit/build-angular:browser",
+                      "@angular-devkit/build-angular:browser-esbuild",
                       "@angular-devkit/build-angular:dev-server",
                       "@angular-devkit/build-angular:extract-i18n",
                       "@angular-devkit/build-angular:karma",
+                      "@angular-devkit/build-angular:jest",
                       "@angular-devkit/build-angular:protractor",
                       "@angular-devkit/build-angular:server",
                       "@angular-devkit/build-angular:ng-packagr"
@@ -348,6 +385,28 @@
               },
               "additionalProperties": false,
               "required": ["builder"]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "builder": {
+                  "const": "@angular-devkit/build-angular:application"
+                },
+                "defaultConfiguration": {
+                  "type": "string",
+                  "description": "A default named configuration to use when a target configuration is not provided."
+                },
+                "options": {
+                  "$ref": "../../../../angular_devkit/build_angular/src/builders/application/schema.json"
+                },
+                "configurations": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "../../../../angular_devkit/build_angular/src/builders/application/schema.json"
+                  }
+                }
+              }
             },
             {
               "type": "object",
@@ -389,6 +448,28 @@
                   "type": "object",
                   "additionalProperties": {
                     "$ref": "../../../../angular_devkit/build_angular/src/builders/browser/schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "builder": {
+                  "const": "@angular-devkit/build-angular:browser-esbuild"
+                },
+                "defaultConfiguration": {
+                  "type": "string",
+                  "description": "A default named configuration to use when a target configuration is not provided."
+                },
+                "options": {
+                  "$ref": "../../../../angular_devkit/build_angular/src/builders/browser-esbuild/schema.json"
+                },
+                "configurations": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "../../../../angular_devkit/build_angular/src/builders/browser-esbuild/schema.json"
                   }
                 }
               }
@@ -455,6 +536,28 @@
                   "type": "object",
                   "additionalProperties": {
                     "$ref": "../../../../angular_devkit/build_angular/src/builders/karma/schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "builder": {
+                  "const": "@angular-devkit/build-angular:jest"
+                },
+                "defaultConfiguration": {
+                  "type": "string",
+                  "description": "A default named configuration to use when a target configuration is not provided."
+                },
+                "options": {
+                  "$ref": "../../../../angular_devkit/build_angular/src/builders/jest/schema.json"
+                },
+                "configurations": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "../../../../angular_devkit/build_angular/src/builders/jest/schema.json"
                   }
                 }
               }
@@ -533,14 +636,13 @@
       "type": "object",
       "properties": {
         "$schema": {
-          "type": "string",
-          "format": "uri"
+          "type": "string"
         },
         "version": {
           "$ref": "#/definitions/fileVersion"
         },
         "cli": {
-          "$ref": "#/definitions/cliOptions"
+          "$ref": "#/definitions/cliGlobalOptions"
         },
         "schematics": {
           "$ref": "#/definitions/schematicOptions"

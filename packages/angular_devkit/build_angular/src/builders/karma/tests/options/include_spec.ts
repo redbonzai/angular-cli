@@ -17,12 +17,8 @@ describeBuilder(execute, KARMA_BUILDER_INFO, (harness) => {
         include: ['abc.spec.ts', 'def.spec.ts'],
       });
 
-      const { error } = await harness.executeOnce({
-        outputLogsOnException: false,
-      });
-      expect(error?.message).toBe(
-        'Specified patterns: "abc.spec.ts, def.spec.ts" did not match any spec files.',
-      );
+      const { result } = await harness.executeOnce();
+      expect(result?.success).toBeFalse();
     });
 
     [
@@ -53,6 +49,10 @@ describeBuilder(execute, KARMA_BUILDER_INFO, (harness) => {
       {
         test: 'glob with spec suffix',
         input: ['**/*.pipe.spec.ts', '**/*.pipe.spec.ts', '**/*test.service.spec.ts'],
+      },
+      {
+        test: 'glob with forward slash and spec suffix',
+        input: ['/**/*test.service.spec.ts'],
       },
     ].forEach((options, index) => {
       it(`should work with ${options.test} (${index})`, async () => {

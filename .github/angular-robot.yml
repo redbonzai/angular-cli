@@ -5,7 +5,7 @@ merge:
   # the status will be added to your pull requests
   status:
     # set to true to disable
-    disabled: false
+    disabled: true
     # the name of the status
     context: 'ci/angular: merge status'
     # text to show when all checks pass
@@ -39,16 +39,8 @@ merge:
       - 'PR state: blocked'
 
     # list of PR statuses that need to be successful
-    requiredStatuses:
-      - 'ci/circleci: build'
-      - 'ci/circleci: setup'
-      - 'ci/circleci: lint'
-      - 'ci/circleci: validate'
-      - 'ci/circleci: test'
-      - 'ci/circleci: e2e-cli-win'
-      - 'ci/circleci: e2e-cli'
-      - 'ci/circleci: test-browsers'
-      - 'ci/angular: size'
+    # NOTE: Required PR statuses are now exclusively handled via Github configuration
+    requiredStatuses: []
 
   # the comment that will be added when the merge label is added despite failing checks, leave empty or set to false to disable
   # {{MERGE_LABEL}} will be replaced by the value of the mergeLabel option
@@ -58,41 +50,43 @@ merge:
     checks are still failing:
 
     {{PLACEHOLDER}}
-     
+
     **If you want your PR to be merged, it has to pass all the CI checks.**
-     
-    If you can't get the PR to a green state due to flakes or broken master,
-    please try rebasing to master and/or restarting the CI job. If that fails
+
+    If you can't get the PR to a green state due to flakes or broken `main`,
+    please try rebasing to `main` and/or restarting the CI job. If that fails
     and you believe that the issue is not due to your change, please contact the
     caretaker and ask for help.
 # options for the triage plugin
 triage:
   # set to true to disable
-  disabled: false
+  disabled: true
   # number of the milestone to apply when the issue has not been triaged yet
   needsTriageMilestone: 11,
   # number of the milestone to apply when the issue is triaged
   defaultMilestone: 12,
   # arrays of labels that determine if an issue has been triaged by the caretaker
   l1TriageLabels:
-    - - 'comp: *'
+    - - 'area: *'
   # arrays of labels that determine if an issue has been fully triaged
   l2TriageLabels:
     - - 'type: bug/fix'
       - 'severity*'
       - 'freq*'
-      - 'comp: *'
+      - 'area: *'
     - - 'type: feature'
-      - 'comp: *'
+      - 'area: *'
     - - 'type: refactor'
-      - 'comp: *'
+      - 'area: *'
     - - 'type: RFC / Discussion / question'
-      - 'comp: *'
+      - 'area: *'
     - - 'type: docs'
-      - 'comp: *'
+      - 'area: *'
 
 # Size checking
 size:
+  # Size checking for production build is performed via the E2E test `build/prod-build`
+  disabled: true
   circleCiStatusName: 'ci/circleci: e2e-cli'
   maxSizeIncrease: 10000
   comment: false

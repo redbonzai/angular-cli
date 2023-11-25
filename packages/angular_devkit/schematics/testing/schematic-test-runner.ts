@@ -7,8 +7,7 @@
  */
 
 import { logging, schema } from '@angular-devkit/core';
-import { Observable, of as observableOf } from 'rxjs';
-import { map } from 'rxjs/operators';
+import { Observable, lastValueFrom, of as observableOf } from 'rxjs';
 import {
   Collection,
   DelegateTree,
@@ -49,7 +48,10 @@ export class SchematicTestRunner {
   private _collection: Collection<{}, {}>;
   private _logger: logging.Logger;
 
-  constructor(private _collectionName: string, collectionPath: string) {
+  constructor(
+    private _collectionName: string,
+    collectionPath: string,
+  ) {
     this._engineHost.registerCollection(_collectionName, collectionPath);
     this._logger = new logging.Logger('test');
 
@@ -78,34 +80,34 @@ export class SchematicTestRunner {
     this._engineHost.registerCollection(collectionName, collectionPath);
   }
 
-  runSchematicAsync<SchematicSchemaT>(
+  async runSchematic<SchematicSchemaT extends object>(
     schematicName: string,
     opts?: SchematicSchemaT,
     tree?: Tree,
-  ): Observable<UnitTestTree> {
+  ): Promise<UnitTestTree> {
     const schematic = this._collection.createSchematic(schematicName, true);
     const host = observableOf(tree || new HostTree());
     this._engineHost.clearTasks();
 
-    return schematic
-      .call(opts || {}, host, { logger: this._logger })
-      .pipe(map((tree) => new UnitTestTree(tree)));
+    const newTree = await lastValueFrom(schematic.call(opts || {}, host, { logger: this._logger }));
+
+    return new UnitTestTree(newTree);
   }
 
-  runExternalSchematicAsync<SchematicSchemaT>(
+  async runExternalSchematic<SchematicSchemaT extends object>(
     collectionName: string,
     schematicName: string,
     opts?: SchematicSchemaT,
     tree?: Tree,
-  ): Observable<UnitTestTree> {
+  ): Promise<UnitTestTree> {
     const externalCollection = this._engine.createCollection(collectionName);
     const schematic = externalCollection.createSchematic(schematicName, true);
     const host = observableOf(tree || new HostTree());
     this._engineHost.clearTasks();
 
-    return schematic
-      .call(opts || {}, host, { logger: this._logger })
-      .pipe(map((tree) => new UnitTestTree(tree)));
+    const newTree = await lastValueFrom(schematic.call(opts || {}, host, { logger: this._logger }));
+
+    return new UnitTestTree(newTree);
   }
 
   callRule(rule: Rule, tree: Tree, parentContext?: Partial<SchematicContext>): Observable<Tree> {

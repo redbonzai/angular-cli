@@ -8,11 +8,10 @@
 
 import { BuilderContext, createBuilder } from '@angular-devkit/architect';
 import { resolve as pathResolve } from 'path';
-import { Observable, from, isObservable, of } from 'rxjs';
-import { switchMap } from 'rxjs/operators';
+import { Observable, from, isObservable, of, switchMap } from 'rxjs';
 import webpack from 'webpack';
 import WebpackDevServer from 'webpack-dev-server';
-import { getEmittedFiles } from '../utils';
+import { getEmittedFiles, getWebpackConfig } from '../utils';
 import { BuildResult, WebpackFactory, WebpackLoggingCallback } from '../webpack';
 import { Schema as WebpackDevServerBuilderSchema } from './schema';
 
@@ -28,6 +27,7 @@ export function runWebpackDevServer(
   config: webpack.Configuration,
   context: BuilderContext,
   options: {
+    shouldProvideStats?: boolean;
     devServerConfig?: WebpackDevServer.Configuration;
     logging?: WebpackLoggingCallback;
     webpackFactory?: WebpackFactory;
@@ -61,6 +61,8 @@ export function runWebpackDevServer(
   const log: WebpackLoggingCallback =
     options.logging || ((stats, config) => context.logger.info(stats.toString(config.stats)));
 
+  const shouldProvideStats = options.shouldProvideStats ?? true;
+
   return createWebpack({ ...config, watch: false }).pipe(
     switchMap(
       (webpackCompiler) =>
@@ -70,11 +72,14 @@ export function runWebpackDevServer(
 
           let result: Partial<DevServerBuildOutput>;
 
+          const statsOptions = typeof config.stats === 'boolean' ? undefined : config.stats;
+
           webpackCompiler.hooks.done.tap('build-webpack', (stats) => {
             // Log stats.
             log(stats, config);
             obs.next({
               ...result,
+              webpackStats: shouldProvideStats ? stats.toJson(statsOptions) : undefined,
               emittedFiles: getEmittedFiles(stats.compilation),
               success: !stats.hasErrors(),
               outputPath: stats.compilation.outputOptions.path,
@@ -82,8 +87,14 @@ export function runWebpackDevServer(
           });
 
           const devServer = createWebpackDevServer(webpackCompiler, devServerConfig);
-          devServer.startCallback(() => {
-            const address = devServer.server.address();
+          devServer.startCallback((err) => {
+            if (err) {
+              obs.error(err);
+
+              return;
+            }
+
+            const address = devServer.server?.address();
             if (!address) {
               obs.error(new Error(`Dev-server address info is not defined.`));
 
@@ -112,10 +123,8 @@ export default createBuilder<WebpackDevServerBuilderSchema, DevServerBuildOutput
   (options, context) => {
     const configPath = pathResolve(context.workspaceRoot, options.webpackConfig);
 
-    return from(import(configPath)).pipe(
-      switchMap(({ default: config }: { default: webpack.Configuration }) =>
-        runWebpackDevServer(config, context),
-      ),
+    return from(getWebpackConfig(configPath)).pipe(
+      switchMap((config) => runWebpackDevServer(config, context)),
     );
   },
 );

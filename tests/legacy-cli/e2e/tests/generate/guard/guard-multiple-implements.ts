@@ -1,16 +1,26 @@
-import {join} from 'path';
-import {ng} from '../../../utils/process';
-import {expectFileToExist,expectFileToMatch} from '../../../utils/fs';
+import { join } from 'path';
+import { ng } from '../../../utils/process';
+import { expectFileToExist, expectFileToMatch } from '../../../utils/fs';
 
-
-export default async function() {
+export default async function () {
   // Does not create a sub directory.
   const guardDir = join('src', 'app');
 
-  await ng('generate', 'guard', 'load', '--implements=CanLoad', '--implements=CanDeactivate');
+  // multiple implements are only supported in (deprecated) class-based guards
+  await ng(
+    'generate',
+    'guard',
+    'multiple',
+    '--implements=CanActivate',
+    '--implements=CanDeactivate',
+    '--no-functional',
+  );
   await expectFileToExist(guardDir);
-  await expectFileToExist(join(guardDir, 'load.guard.ts'));
-  await expectFileToMatch(join(guardDir, 'load.guard.ts'), /implements CanLoad, CanDeactivate<unknown>/);
-  await expectFileToExist(join(guardDir, 'load.guard.spec.ts'));
+  await expectFileToExist(join(guardDir, 'multiple.guard.ts'));
+  await expectFileToMatch(
+    join(guardDir, 'multiple.guard.ts'),
+    /implements CanActivate, CanDeactivate<unknown>/,
+  );
+  await expectFileToExist(join(guardDir, 'multiple.guard.spec.ts'));
   await ng('test', '--watch=false');
 }

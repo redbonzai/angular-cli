@@ -7,19 +7,19 @@
  */
 
 import { BuilderContext, BuilderOutput, createBuilder } from '@angular-devkit/architect';
-import { getSystemPath, join, normalize } from '@angular-devkit/core';
-import { Config, ConfigOptions } from 'karma';
-import { dirname, resolve } from 'path';
-import { Observable, from } from 'rxjs';
-import { defaultIfEmpty, switchMap } from 'rxjs/operators';
+import { strings } from '@angular-devkit/core';
+import type { Config, ConfigOptions } from 'karma';
+import { createRequire } from 'module';
+import * as path from 'path';
+import { Observable, defaultIfEmpty, from, switchMap } from 'rxjs';
 import { Configuration } from 'webpack';
+import { getCommonConfig, getStylesConfig } from '../../tools/webpack/configs';
 import { ExecutionTransformer } from '../../transforms';
+import { purgeStaleBuildCache } from '../../utils/purge-cache';
 import { assertCompatibleAngularVersion } from '../../utils/version';
 import { generateBrowserWebpackConfigFromContext } from '../../utils/webpack-browser-config';
-import { getCommonConfig, getStylesConfig } from '../../webpack/configs';
-import { SingleTestTransformLoader } from '../../webpack/plugins/single-test-transform';
 import { Schema as BrowserBuilderOptions, OutputHashing } from '../browser/schema';
-import { findTests } from './find-tests';
+import { FindTestsPlugin } from './find-tests-plugin';
 import { Schema as KarmaBuilderOptions } from './schema';
 
 export type KarmaConfigOptions = ConfigOptions & {
@@ -32,6 +32,9 @@ async function initialize(
   context: BuilderContext,
   webpackConfigurationTransformer?: ExecutionTransformer<Configuration>,
 ): Promise<[typeof import('karma'), Configuration]> {
+  // Purge old build disk cache.
+  await purgeStaleBuildCache(context);
+
   const { config } = await generateBrowserWebpackConfigFromContext(
     // only two properties are missing:
     // * `outputPath` which is fixed for tests
@@ -59,10 +62,7 @@ async function initialize(
 
   const karma = await import('karma');
 
-  return [
-    karma,
-    webpackConfigurationTransformer ? await webpackConfigurationTransformer(config) : config,
-  ];
+  return [karma, (await webpackConfigurationTransformer?.(config)) ?? config];
 }
 
 /**
@@ -87,9 +87,17 @@ export function execute(
 
   return from(initialize(options, context, transforms.webpackConfiguration)).pipe(
     switchMap(async ([karma, webpackConfig]) => {
-      const karmaOptions: KarmaConfigOptions = {
-        singleRun,
-      };
+      // Determine project name from builder context target
+      const projectName = context.target?.project;
+      if (!projectName) {
+        throw new Error(`The 'karma' builder requires a target to be specified.`);
+      }
+
+      const karmaOptions: KarmaConfigOptions = options.karmaConfig
+        ? {}
+        : getBuiltInKarmaConfig(context.workspaceRoot, projectName);
+
+      karmaOptions.singleRun = singleRun;
 
       // Convert browsers from a string to an array
       if (options.browsers) {
@@ -107,37 +115,29 @@ export function execute(
         }
       }
 
-      // prepend special webpack loader that will transform test.ts
-      if (options.include && options.include.length > 0) {
-        const mainFilePath = getSystemPath(join(normalize(context.workspaceRoot), options.main));
-        const files = findTests(options.include, dirname(mainFilePath), context.workspaceRoot);
-        // early exit, no reason to start karma
-        if (!files.length) {
-          throw new Error(
-            `Specified patterns: "${options.include.join(', ')}" did not match any spec files.`,
-          );
+      if (!options.main) {
+        webpackConfig.entry ??= {};
+        if (typeof webpackConfig.entry === 'object' && !Array.isArray(webpackConfig.entry)) {
+          if (Array.isArray(webpackConfig.entry['main'])) {
+            webpackConfig.entry['main'].push(getBuiltInMainFile());
+          } else {
+            webpackConfig.entry['main'] = [getBuiltInMainFile()];
+          }
         }
-
-        // Get the rules and ensure the Webpack configuration is setup properly
-        const rules = webpackConfig.module?.rules || [];
-        if (!webpackConfig.module) {
-          webpackConfig.module = { rules };
-        } else if (!webpackConfig.module.rules) {
-          webpackConfig.module.rules = rules;
-        }
-
-        rules.unshift({
-          test: mainFilePath,
-          use: {
-            // cannot be a simple path as it differs between environments
-            loader: SingleTestTransformLoader,
-            options: {
-              files,
-              logger: context.logger,
-            },
-          },
-        });
       }
+
+      const projectMetadata = await context.getProjectMetadata(projectName);
+      const sourceRoot = (projectMetadata.sourceRoot ?? projectMetadata.root ?? '') as string;
+
+      webpackConfig.plugins ??= [];
+      webpackConfig.plugins.push(
+        new FindTestsPlugin({
+          include: options.include,
+          exclude: options.exclude,
+          workspaceRoot: context.workspaceRoot,
+          projectSourceRoot: path.join(context.workspaceRoot, sourceRoot),
+        }),
+      );
 
       karmaOptions.buildWebpack = {
         options,
@@ -145,13 +145,13 @@ export function execute(
         logger: context.logger,
       };
 
-      const config = await karma.config.parseConfig(
-        resolve(context.workspaceRoot, options.karmaConfig),
+      const parsedKarmaConfig = await karma.config.parseConfig(
+        options.karmaConfig && path.resolve(context.workspaceRoot, options.karmaConfig),
         transforms.karmaOptions ? transforms.karmaOptions(karmaOptions) : karmaOptions,
         { promiseConfig: true, throwErrors: true },
       );
 
-      return [karma, config] as [typeof karma, KarmaConfigOptions];
+      return [karma, parsedKarmaConfig] as [typeof karma, KarmaConfigOptions];
     }),
     switchMap(
       ([karma, karmaConfig]) =>
@@ -176,12 +176,85 @@ export function execute(
           const karmaStart = karmaServer.start();
 
           // Cleanup, signal Karma to exit.
-          return () => karmaStart.then(() => karmaServer.stop());
+          return () => {
+            void karmaStart.then(() => karmaServer.stop());
+          };
         }),
     ),
     defaultIfEmpty({ success: false }),
   );
 }
 
+function getBuiltInKarmaConfig(
+  workspaceRoot: string,
+  projectName: string,
+): ConfigOptions & Record<string, unknown> {
+  let coverageFolderName = projectName.charAt(0) === '@' ? projectName.slice(1) : projectName;
+  if (/[A-Z]/.test(coverageFolderName)) {
+    coverageFolderName = strings.dasherize(coverageFolderName);
+  }
+
+  const workspaceRootRequire = createRequire(workspaceRoot + '/');
+
+  // Any changes to the config here need to be synced to: packages/schematics/angular/config/files/karma.conf.js.template
+  return {
+    basePath: '',
+    frameworks: ['jasmine', '@angular-devkit/build-angular'],
+    plugins: [
+      'karma-jasmine',
+      'karma-chrome-launcher',
+      'karma-jasmine-html-reporter',
+      'karma-coverage',
+      '@angular-devkit/build-angular/plugins/karma',
+    ].map((p) => workspaceRootRequire(p)),
+    client: {
+      clearContext: false, // leave Jasmine Spec Runner output visible in browser
+    },
+    jasmineHtmlReporter: {
+      suppressAll: true, // removes the duplicated traces
+    },
+    coverageReporter: {
+      dir: path.join(workspaceRoot, 'coverage', coverageFolderName),
+      subdir: '.',
+      reporters: [{ type: 'html' }, { type: 'text-summary' }],
+    },
+    reporters: ['progress', 'kjhtml'],
+    browsers: ['Chrome'],
+    customLaunchers: {
+      // Chrome configured to run in a bazel sandbox.
+      // Disable the use of the gpu and `/dev/shm` because it causes Chrome to
+      // crash on some environments.
+      // See:
+      //   https://github.com/puppeteer/puppeteer/blob/v1.0.0/docs/troubleshooting.md#tips
+      //   https://stackoverflow.com/questions/50642308/webdriverexception-unknown-error-devtoolsactiveport-file-doesnt-exist-while-t
+      ChromeHeadlessNoSandbox: {
+        base: 'ChromeHeadless',
+        flags: ['--no-sandbox', '--headless', '--disable-gpu', '--disable-dev-shm-usage'],
+      },
+    },
+    restartOnFileChange: true,
+  };
+}
+
 export { KarmaBuilderOptions };
 export default createBuilder<Record<string, string> & KarmaBuilderOptions>(execute);
+
+function getBuiltInMainFile(): string {
+  const content = Buffer.from(
+    `
+  import { getTestBed } from '@angular/core/testing';
+  import {
+    BrowserDynamicTestingModule,
+    platformBrowserDynamicTesting,
+   } from '@angular/platform-browser-dynamic/testing';
+
+  // Initialize the Angular testing environment.
+  getTestBed().initTestEnvironment(BrowserDynamicTestingModule, platformBrowserDynamicTesting(), {
+    errorOnUnknownElements: true,
+    errorOnUnknownProperties: true
+  });
+`,
+  ).toString('base64');
+
+  return `ng-virtual-main.js!=!data:text/javascript;base64,${content}`;
+}

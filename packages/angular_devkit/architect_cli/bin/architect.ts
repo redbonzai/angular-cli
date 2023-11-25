@@ -9,13 +9,12 @@
 
 import { Architect, BuilderInfo, BuilderProgressState, Target } from '@angular-devkit/architect';
 import { WorkspaceNodeModulesArchitectHost } from '@angular-devkit/architect/node';
-import { logging, schema, tags, workspaces } from '@angular-devkit/core';
+import { JsonValue, json, logging, schema, tags, workspaces } from '@angular-devkit/core';
 import { NodeJsSyncHost, createConsoleLogger } from '@angular-devkit/core/node';
 import * as ansiColors from 'ansi-colors';
 import { existsSync } from 'fs';
-import minimist from 'minimist';
 import * as path from 'path';
-import { tap } from 'rxjs/operators';
+import yargsParser, { camelCase, decamelize } from 'yargs-parser';
 import { MultiProgressBar } from '../src/progress';
 
 function findUp(names: string | string[], from: string) {
@@ -71,31 +70,42 @@ interface BarInfo {
 }
 
 // Create a separate instance to prevent unintended global changes to the color configuration
-// Create function is not defined in the typings. See: https://github.com/doowb/ansi-colors/pull/44
-const colors = (ansiColors as typeof ansiColors & { create: () => typeof ansiColors }).create();
+const colors = ansiColors.create();
 
 async function _executeTarget(
   parentLogger: logging.Logger,
   workspace: workspaces.WorkspaceDefinition,
   root: string,
-  argv: minimist.ParsedArgs,
+  argv: ReturnType<typeof yargsParser>,
   registry: schema.SchemaRegistry,
 ) {
   const architectHost = new WorkspaceNodeModulesArchitectHost(workspace, root);
   const architect = new Architect(architectHost, registry);
 
   // Split a target into its parts.
-  const targetStr = argv._.shift() || '';
-  const [project, target, configuration] = targetStr.split(':');
+  const {
+    _: [targetStr = ''],
+    help,
+    ...options
+  } = argv;
+  const [project, target, configuration] = targetStr.toString().split(':');
   const targetSpec = { project, target, configuration };
 
-  delete argv['help'];
   const logger = new logging.Logger('jobs');
   const logs: logging.LogEntry[] = [];
   logger.subscribe((entry) => logs.push({ ...entry, message: `${entry.name}: ` + entry.message }));
 
-  const { _, ...options } = argv;
-  const run = await architect.scheduleTarget(targetSpec, options, { logger });
+  // Camelize options as yargs will return the object in kebab-case when camel casing is disabled.
+  const camelCasedOptions: json.JsonObject = {};
+  for (const [key, value] of Object.entries(options)) {
+    if (/[A-Z]/.test(key)) {
+      throw new Error(`Unknown argument ${key}. Did you mean ${decamelize(key)}?`);
+    }
+
+    camelCasedOptions[camelCase(key)] = value as JsonValue;
+  }
+
+  const run = await architect.scheduleTarget(targetSpec, camelCasedOptions, { logger });
   const bars = new MultiProgressBar<number, BarInfo>(':name :bar (:current/:total) :status');
 
   run.progress.subscribe((update) => {
@@ -107,7 +117,7 @@ async function _executeTarget(
       name: (
         (update.target ? _targetStringFromTarget(update.target) : update.builder.name) +
         ' '.repeat(80)
-      ).substr(0, 40),
+      ).substring(0, 40),
     };
 
     if (update.status !== undefined) {
@@ -140,34 +150,29 @@ async function _executeTarget(
 
   // Wait for full completion of the builder.
   try {
-    const { success } = await run.output
-      .pipe(
-        tap((result) => {
-          if (result.success) {
-            parentLogger.info(colors.green('SUCCESS'));
-          } else {
-            parentLogger.info(colors.red('FAILURE'));
-          }
-          parentLogger.info('Result: ' + JSON.stringify({ ...result, info: undefined }, null, 4));
+    const result = await run.lastOutput;
+    if (result.success) {
+      parentLogger.info(colors.green('SUCCESS'));
+    } else {
+      parentLogger.info(colors.red('FAILURE'));
+    }
+    parentLogger.info('Result: ' + JSON.stringify({ ...result, info: undefined }, null, 4));
 
-          parentLogger.info('\nLogs:');
-          logs.forEach((l) => parentLogger.next(l));
-          logs.splice(0);
-        }),
-      )
-      .toPromise();
+    parentLogger.info('\nLogs:');
+    logs.forEach((l) => parentLogger.next(l));
+    logs.splice(0);
 
     await run.stop();
     bars.terminate();
 
-    return success ? 0 : 1;
+    return result.success ? 0 : 1;
   } catch (err) {
     parentLogger.info(colors.red('ERROR'));
     parentLogger.info('\nLogs:');
     logs.forEach((l) => parentLogger.next(l));
 
     parentLogger.fatal('Exception:');
-    parentLogger.fatal(err.stack);
+    parentLogger.fatal((err instanceof Error && err.stack) || `${err}`);
 
     return 2;
   }
@@ -175,7 +180,15 @@ async function _executeTarget(
 
 async function main(args: string[]): Promise<number> {
   /** Parse the command line. */
-  const argv = minimist(args, { boolean: ['help'] });
+  const argv = yargsParser(args, {
+    boolean: ['help'],
+    configuration: {
+      'dot-notation': false,
+      'boolean-negation': true,
+      'strip-aliased': true,
+      'camel-case-expansion': false,
+    },
+  });
 
   /** Create the DevKit Logger used through the CLI. */
   const logger = createConsoleLogger(argv['verbose'], process.stdout, process.stderr, {

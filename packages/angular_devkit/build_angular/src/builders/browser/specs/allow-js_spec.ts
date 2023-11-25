@@ -9,8 +9,7 @@
 import { Architect } from '@angular-devkit/architect';
 import { BrowserBuilderOutput } from '@angular-devkit/build-angular';
 import { join, normalize, relative, virtualFs } from '@angular-devkit/core';
-import { Observable } from 'rxjs';
-import { take, tap } from 'rxjs/operators';
+import { Observable, lastValueFrom, take, tap } from 'rxjs';
 import { createArchitect, host } from '../../../testing/test-utils';
 
 describe('Browser Builder allow js', () => {
@@ -29,17 +28,21 @@ describe('Browser Builder allow js', () => {
       'src/main.ts': `import { a } from './my-js-file'; console.log(a);`,
     });
 
-    host.replaceInFile('tsconfig.json', '"target": "es2017"', '"target": "es5", "allowJs": true');
+    host.replaceInFile(
+      'tsconfig.json',
+      '"target": "es2022"',
+      '"target": "es2022", "allowJs": true',
+    );
 
     const run = await architect.scheduleTarget(targetSpec);
     const output = (await run.result) as BrowserBuilderOutput;
     expect(output.success).toBe(true);
 
     const content = virtualFs.fileBufferToString(
-      await host.read(join(normalize(output.outputPath), 'main.js')).toPromise(),
+      await lastValueFrom(host.read(join(normalize(output.outputs[0].path), 'main.js'))),
     );
 
-    expect(content).toContain('var a = 2');
+    expect(content).toContain('const a = 2');
 
     await run.stop();
   });
@@ -50,7 +53,11 @@ describe('Browser Builder allow js', () => {
       'src/main.ts': `import { a } from './my-js-file'; console.log(a);`,
     });
 
-    host.replaceInFile('tsconfig.json', '"target": "es2017"', '"target": "es5", "allowJs": true');
+    host.replaceInFile(
+      'tsconfig.json',
+      '"target": "es2022"',
+      '"target": "es2022", "allowJs": true',
+    );
 
     const overrides = { aot: true };
 
@@ -59,10 +66,10 @@ describe('Browser Builder allow js', () => {
     expect(output.success).toBe(true);
 
     const content = virtualFs.fileBufferToString(
-      await host.read(join(normalize(output.outputPath), 'main.js')).toPromise(),
+      await lastValueFrom(host.read(join(normalize(output.outputs[0].path), 'main.js'))),
     );
 
-    expect(content).toContain('var a = 2');
+    expect(content).toContain('const a = 2');
 
     await run.stop();
   });
@@ -73,28 +80,32 @@ describe('Browser Builder allow js', () => {
       'src/main.ts': `import { a } from './my-js-file'; console.log(a);`,
     });
 
-    host.replaceInFile('tsconfig.json', '"target": "es2017"', '"target": "es5", "allowJs": true');
+    host.replaceInFile(
+      'tsconfig.json',
+      '"target": "es2022"',
+      '"target": "es2022", "allowJs": true',
+    );
 
     const overrides = { watch: true };
 
     let buildCount = 1;
     const run = await architect.scheduleTarget(targetSpec, overrides);
 
-    await (run.output as Observable<BrowserBuilderOutput>)
-      .pipe(
+    await lastValueFrom(
+      (run.output as Observable<BrowserBuilderOutput>).pipe(
         tap((output) => {
-          const path = relative(host.root(), join(normalize(output.outputPath), 'main.js'));
+          const path = relative(host.root(), join(normalize(output.outputs[0].path), 'main.js'));
           const content = virtualFs.fileBufferToString(host.scopedSync().read(path));
 
           switch (buildCount) {
             case 1:
-              expect(content).toContain('var a = 2');
+              expect(content).toContain('const a = 2');
               host.writeMultipleFiles({
                 'src/my-js-file.js': `console.log(1); export const a = 1;`,
               });
               break;
             case 2:
-              expect(content).toContain('var a = 1');
+              expect(content).toContain('const a = 1');
               break;
           }
 
@@ -102,8 +113,8 @@ describe('Browser Builder allow js', () => {
         }),
         tap((buildEvent) => expect(buildEvent.success).toBe(true)),
         take(2),
-      )
-      .toPromise();
+      ),
+    );
 
     await run.stop();
   });

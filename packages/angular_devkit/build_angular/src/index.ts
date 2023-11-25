@@ -13,8 +13,6 @@ export {
   AssetPatternClass as AssetPatternObject,
   Budget,
   CrossOrigin,
-  ExtraEntryPoint,
-  ExtraEntryPointClass as ExtraEntryPointObject,
   FileReplacement,
   OptimizationClass as OptimizationObject,
   OptimizationUnion,
@@ -31,8 +29,10 @@ export {
   BrowserBuilderOutput,
 } from './builders/browser';
 
+export { buildApplication, ApplicationBuilderOptions } from './builders/application';
+
 export {
-  serveWebpackBrowser as executeDevServerBuilder,
+  executeDevServerBuilder,
   DevServerBuilderOptions,
   DevServerBuilderOutput,
 } from './builders/dev-server';
@@ -58,5 +58,11 @@ export {
   ServerBuilderOptions,
   ServerBuilderOutput,
 } from './builders/server';
+
+export {
+  execute as executeSSRDevServerBuilder,
+  SSRDevServerBuilderOptions,
+  SSRDevServerBuilderOutput,
+} from './builders/ssr-dev-server';
 
 export { execute as executeNgPackagrBuilder, NgPackagrBuilderOptions } from './builders/ng-packagr';

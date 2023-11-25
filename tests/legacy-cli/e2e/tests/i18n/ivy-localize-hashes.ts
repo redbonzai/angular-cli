@@ -11,9 +11,9 @@ import { appendToFile } from '../../utils/fs';
 import { ng } from '../../utils/process';
 import { langTranslations, setupI18nConfig } from './setup';
 
-const OUTPUT_RE = /^(?<name>(?:main|vendor|\d+))\.(?<hash>[a-z0-9]+)\.js$/i;
+const OUTPUT_RE = /^(?<name>(?:main|vendor|\d+))(?:\.|-)(?<hash>[a-z0-9]+)\.js$/i;
 
-export default async function() {
+export default async function () {
   // Setup i18n tests and config.
   await setupI18nConfig();
 
@@ -23,7 +23,7 @@ export default async function() {
   for (const { lang, outputPath } of langTranslations) {
     for (const entry of fs.readdirSync(outputPath)) {
       const match = entry.match(OUTPUT_RE);
-      if (!match) {
+      if (!match?.groups) {
         continue;
       }
 
@@ -44,7 +44,7 @@ export default async function() {
   for (const { lang, outputPath } of langTranslations) {
     for (const entry of fs.readdirSync(outputPath)) {
       const match = entry.match(OUTPUT_RE);
-      if (!match) {
+      if (!match?.groups) {
         continue;
       }
 
@@ -53,7 +53,7 @@ export default async function() {
       if (!hash) {
         throw new Error('Unexpected output entry: ' + id);
       }
-      if (hash === match.groups.hash) {
+      if (hash === match.groups!.hash) {
         throw new Error('Hash value did not change for entry: ' + id);
       }
 

@@ -6,9 +6,8 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { BaseException, isPromise } from '@angular-devkit/core';
-import { Observable, from, isObservable, of as observableOf, throwError } from 'rxjs';
-import { defaultIfEmpty, last, mergeMap, tap } from 'rxjs/operators';
+import { BaseException } from '@angular-devkit/core';
+import { Observable, defaultIfEmpty, defer, isObservable, lastValueFrom, mergeMap } from 'rxjs';
 import { Rule, SchematicContext, Source } from '../engine/interface';
 import { Tree, TreeSymbol } from '../tree/interface';
 
@@ -48,24 +47,19 @@ export class InvalidSourceResultException extends BaseException {
 }
 
 export function callSource(source: Source, context: SchematicContext): Observable<Tree> {
-  const result = source(context);
+  return defer(async () => {
+    let result: Tree | Observable<Tree> | undefined = source(context);
 
-  if (isObservable(result)) {
-    // Only return the last Tree, and make sure it's a Tree.
-    return result.pipe(
-      defaultIfEmpty(),
-      last(),
-      tap((inner) => {
-        if (!inner || !(TreeSymbol in inner)) {
-          throw new InvalidSourceResultException(inner);
-        }
-      }),
-    );
-  } else if (result && TreeSymbol in result) {
-    return observableOf(result);
-  } else {
-    return throwError(new InvalidSourceResultException(result));
-  }
+    if (isObservable(result)) {
+      result = await lastValueFrom(result.pipe(defaultIfEmpty(undefined)));
+    }
+
+    if (result && TreeSymbol in result) {
+      return result as Tree;
+    }
+
+    throw new InvalidSourceResultException(result);
+  });
 }
 
 export function callRule(
@@ -73,42 +67,32 @@ export function callRule(
   input: Tree | Observable<Tree>,
   context: SchematicContext,
 ): Observable<Tree> {
-  return (isObservable(input) ? input : observableOf(input)).pipe(
-    mergeMap((inputTree) => {
-      const result = rule(inputTree, context);
+  if (isObservable(input)) {
+    return input.pipe(mergeMap((inputTree) => callRuleAsync(rule, inputTree, context)));
+  } else {
+    return defer(() => callRuleAsync(rule, input, context));
+  }
+}
 
-      if (!result) {
-        return observableOf(inputTree);
-      } else if (typeof result == 'function') {
-        // This is considered a Rule, chain the rule and return its output.
-        return callRule(result, inputTree, context);
-      } else if (isObservable(result)) {
-        // Only return the last Tree, and make sure it's a Tree.
-        return result.pipe(
-          defaultIfEmpty(),
-          last(),
-          tap((inner) => {
-            if (!inner || !(TreeSymbol in inner)) {
-              throw new InvalidRuleResultException(inner);
-            }
-          }),
-        );
-      } else if (isPromise(result)) {
-        return from(result).pipe(
-          mergeMap((inner) => {
-            if (typeof inner === 'function') {
-              // This is considered a Rule, chain the rule and return its output.
-              return callRule(inner, inputTree, context);
-            } else {
-              return observableOf(inputTree);
-            }
-          }),
-        );
-      } else if (TreeSymbol in result) {
-        return observableOf(result);
-      } else {
-        return throwError(new InvalidRuleResultException(result));
-      }
-    }),
-  );
+async function callRuleAsync(rule: Rule, tree: Tree, context: SchematicContext): Promise<Tree> {
+  let result = await rule(tree, context);
+
+  while (typeof result === 'function') {
+    // This is considered a Rule, chain the rule and return its output.
+    result = await result(tree, context);
+  }
+
+  if (typeof result === 'undefined') {
+    return tree;
+  }
+
+  if (isObservable(result)) {
+    result = await lastValueFrom(result.pipe(defaultIfEmpty(tree)));
+  }
+
+  if (result && TreeSymbol in result) {
+    return result as Tree;
+  }
+
+  throw new InvalidRuleResultException(result);
 }

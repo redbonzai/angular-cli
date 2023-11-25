@@ -1,14 +1,21 @@
-import { expectFileToMatch, prependToFile, readFile, replaceInFile, writeFile } from '../../utils/fs';
+import { getGlobalVariable } from '../../utils/env';
+import {
+  expectFileToMatch,
+  prependToFile,
+  readFile,
+  replaceInFile,
+  writeFile,
+} from '../../utils/fs';
 import { ng } from '../../utils/process';
 import { updateJsonFile } from '../../utils/project';
-import { externalServer, langTranslations, setupI18nConfig } from './setup';
+import { langTranslations, setupI18nConfig } from './setup';
 
-export default async function() {
+export default async function () {
   // Setup i18n tests and config.
   await setupI18nConfig();
 
   // Update angular.json to only localize one locale
-  await updateJsonFile('angular.json', workspaceJson => {
+  await updateJsonFile('angular.json', (workspaceJson) => {
     const appProject = workspaceJson.projects['test-project'];
     appProject.architect['build'].options.localize = ['fr'];
   });
@@ -19,7 +26,7 @@ export default async function() {
   // Augment the locale data and import into the main application file
   const localeData = await readFile('node_modules/@angular/common/locales/global/fr.js');
   await writeFile('src/fr-changed.js', localeData.replace('janvier', 'changed-janvier'));
-  await prependToFile('src/main.ts', 'import \'./fr-changed.js\';\n');
+  await prependToFile('src/main.ts', "import './fr-changed.js';\n");
 
   // Run a build and test
   await ng('build');
@@ -29,24 +36,15 @@ export default async function() {
       continue;
     }
 
-    // Ensure locale is inlined (@angular/localize plugin inlines `$localize.locale` references)
-    // The only reference in a new application is in @angular/core
-    await expectFileToMatch(`${outputPath}/vendor.js`, lang);
+    const useWebpackBuilder = !getGlobalVariable('argv')['esbuild'];
+    if (useWebpackBuilder) {
+      // The only reference in a new application with Webpack is in @angular/core
+      await expectFileToMatch(`${outputPath}/vendor.js`, lang);
+    } else {
+      await expectFileToMatch(`${outputPath}/polyfills.js`, lang);
+    }
 
     // Execute Application E2E tests with dev server
     await ng('e2e', `--configuration=${lang}`, '--port=0');
-
-    // Execute Application E2E tests for a production build without dev server
-    const server = externalServer(outputPath, `/${lang}/`);
-    try {
-      await ng(
-        'e2e',
-        `--configuration=${lang}`,
-        '--devServerTarget=',
-        `--baseUrl=http://localhost:4200/${lang}/`,
-      );
-    } finally {
-      server.close();
-    }
   }
 }

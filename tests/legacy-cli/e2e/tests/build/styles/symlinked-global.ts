@@ -10,24 +10,18 @@ export default async function () {
     'src/styles-for-link.scss': `p { color: blue }`,
   });
 
-  symlinkSync(
-    resolve('src/styles-for-link.scss'),
-    resolve('src/styles-linked.scss'),
-  );
+  symlinkSync(resolve('src/styles-for-link.scss'), resolve('src/styles-linked.scss'));
 
-  await updateJsonFile('angular.json', workspaceJson => {
+  await updateJsonFile('angular.json', (workspaceJson) => {
     const appArchitect = workspaceJson.projects['test-project'].architect;
-    appArchitect.build.options.styles = [
-      'src/styles.scss',
-      'src/styles-linked.scss',
-    ];
+    appArchitect.build.options.styles = ['src/styles.scss', 'src/styles-linked.scss'];
   });
 
   await ng('build', '--configuration=development');
-  await expectFileToMatch('dist/test-project/styles.css', 'red');
-  await expectFileToMatch('dist/test-project/styles.css', 'blue');
+  await expectFileToMatch('dist/test-project/browser/styles.css', 'red');
+  await expectFileToMatch('dist/test-project/browser/styles.css', 'blue');
 
   await ng('build', '--preserve-symlinks', '--configuration=development');
-  await expectFileToMatch('dist/test-project/styles.css', 'red');
-  await expectFileToMatch('dist/test-project/styles.css', 'blue');
+  await expectFileToMatch('dist/test-project/browser/styles.css', 'red');
+  await expectFileToMatch('dist/test-project/browser/styles.css', 'blue');
 }

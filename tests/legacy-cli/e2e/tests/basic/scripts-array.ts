@@ -1,4 +1,4 @@
-import { oneLineTrim } from 'common-tags';
+import { getGlobalVariable } from '../../utils/env';
 import { appendToFile, expectFileToMatch, writeMultipleFiles } from '../../utils/fs';
 import { ng } from '../../utils/process';
 import { updateJsonFile } from '../../utils/project';
@@ -44,22 +44,37 @@ export default async function () {
   await ng('build', '--configuration=development');
 
   // files were created successfully
-  await expectFileToMatch('dist/test-project/scripts.js', 'string-script');
-  await expectFileToMatch('dist/test-project/scripts.js', 'input-script');
-  await expectFileToMatch('dist/test-project/lazy-script.js', 'lazy-script');
-  await expectFileToMatch('dist/test-project/renamed-script.js', 'pre-rename-script');
-  await expectFileToMatch('dist/test-project/renamed-lazy-script.js', 'pre-rename-lazy-script');
+  await expectFileToMatch('dist/test-project/browser/scripts.js', 'string-script');
+  await expectFileToMatch('dist/test-project/browser/scripts.js', 'input-script');
+  await expectFileToMatch('dist/test-project/browser/lazy-script.js', 'lazy-script');
+  await expectFileToMatch('dist/test-project/browser/renamed-script.js', 'pre-rename-script');
+  await expectFileToMatch(
+    'dist/test-project/browser/renamed-lazy-script.js',
+    'pre-rename-lazy-script',
+  );
 
   // index.html lists the right bundles
-  await expectFileToMatch(
-    'dist/test-project/index.html',
-    oneLineTrim`
-    <script src="runtime.js" type="module"></script>
-    <script src="polyfills.js" type="module"></script>
-    <script src="scripts.js" defer></script>
-    <script src="renamed-script.js" defer></script>
-    <script src="vendor.js" type="module"></script>
-    <script src="main.js" type="module"></script>
-  `,
-  );
+  if (getGlobalVariable('argv')['esbuild']) {
+    await expectFileToMatch(
+      'dist/test-project/browser/index.html',
+      [
+        '<script src="polyfills.js" type="module"></script>',
+        '<script src="scripts.js" defer></script>',
+        '<script src="renamed-script.js" defer></script>',
+        '<script src="main.js" type="module"></script>',
+      ].join(''),
+    );
+  } else {
+    await expectFileToMatch(
+      'dist/test-project/browser/index.html',
+      [
+        '<script src="runtime.js" type="module"></script>',
+        '<script src="polyfills.js" type="module"></script>',
+        '<script src="scripts.js" defer></script>',
+        '<script src="renamed-script.js" defer></script>',
+        '<script src="vendor.js" type="module"></script>',
+        '<script src="main.js" type="module"></script>',
+      ].join(''),
+    );
+  }
 }

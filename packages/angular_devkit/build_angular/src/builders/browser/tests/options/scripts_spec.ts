@@ -27,6 +27,27 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
       expect(result?.success).toBe(true);
     });
 
+    it('processes an empty script when optimizing', async () => {
+      await harness.writeFile('src/test-script-a.js', '');
+
+      harness.useTarget('build', {
+        ...BASE_OPTIONS,
+        optimization: {
+          scripts: true,
+        },
+        scripts: ['src/test-script-a.js'],
+      });
+
+      const { result } = await harness.executeOnce();
+
+      expect(result?.success).toBe(true);
+
+      harness.expectFile('dist/scripts.js').toExist();
+      harness
+        .expectFile('dist/index.html')
+        .content.toContain('<script src="scripts.js" defer></script>');
+    });
+
     describe('shorthand syntax', () => {
       it('processes a single script into a single output', async () => {
         await harness.writeFile('src/test-script-a.js', 'console.log("a");');
@@ -93,18 +114,19 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
           );
       });
 
-      it('throws an exception if script does not exist', async () => {
+      it('fails and shows an error if script does not exist', async () => {
         harness.useTarget('build', {
           ...BASE_OPTIONS,
           scripts: ['src/test-script-a.js'],
         });
 
-        const { result, error } = await harness.executeOnce({ outputLogsOnException: false });
+        const { result, logs } = await harness.executeOnce();
 
-        expect(result).toBeUndefined();
-        expect(error).toEqual(
+        expect(result?.success).toBeFalse();
+        expect(logs).toContain(
           jasmine.objectContaining({
-            message: jasmine.stringMatching(`Script file src/test-script-a.js does not exist.`),
+            level: 'error',
+            message: jasmine.stringMatching(`Can't resolve 'src/test-script-a.js'`),
           }),
         );
 

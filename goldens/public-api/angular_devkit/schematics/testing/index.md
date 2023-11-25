@@ -4,9 +4,10 @@
 
 ```ts
 
-/// <reference types="node" />
+/// <reference types="@types/node/ts4.8/url" />
+/// <reference types="@types/node/url" />
 
-import { analytics } from '@angular-devkit/core';
+import { JsonValue } from '@angular-devkit/core';
 import { logging } from '@angular-devkit/core';
 import { Observable } from 'rxjs';
 import { Path } from '@angular-devkit/core';
@@ -25,9 +26,9 @@ export class SchematicTestRunner {
     // (undocumented)
     registerCollection(collectionName: string, collectionPath: string): void;
     // (undocumented)
-    runExternalSchematicAsync<SchematicSchemaT>(collectionName: string, schematicName: string, opts?: SchematicSchemaT, tree?: Tree_2): Observable<UnitTestTree>;
+    runExternalSchematic<SchematicSchemaT extends object>(collectionName: string, schematicName: string, opts?: SchematicSchemaT, tree?: Tree_2): Promise<UnitTestTree>;
     // (undocumented)
-    runSchematicAsync<SchematicSchemaT>(schematicName: string, opts?: SchematicSchemaT, tree?: Tree_2): Observable<UnitTestTree>;
+    runSchematic<SchematicSchemaT extends object>(schematicName: string, opts?: SchematicSchemaT, tree?: Tree_2): Promise<UnitTestTree>;
     // (undocumented)
     get tasks(): TaskConfiguration[];
 }

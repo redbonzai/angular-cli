@@ -9,37 +9,35 @@
 import { dirname, join, normalize } from '@angular-devkit/core';
 import {
   Rule,
-  SchematicContext,
   SchematicsException,
   Tree,
   chain,
   noop,
   schematic,
 } from '@angular-devkit/schematics';
-import { Schema as ComponentOptions } from '../component/schema';
+import { findBootstrapApplicationCall } from '../private/standalone';
 import * as ts from '../third_party/github.com/Microsoft/TypeScript/lib/typescript';
 import {
   addImportToModule,
   addSymbolToNgModuleMetadata,
   findNode,
+  findNodes,
   getDecoratorMetadata,
   getSourceNodes,
   insertImport,
   isImported,
 } from '../utility/ast-utils';
 import { applyToUpdateRecorder } from '../utility/change';
-import { getAppModulePath } from '../utility/ng-ast-utils';
-import { targetBuildNotFoundError } from '../utility/project-targets';
+import { getAppModulePath, isStandaloneApp } from '../utility/ng-ast-utils';
+import { getMainFilePath } from '../utility/standalone/util';
 import { getWorkspace, updateWorkspace } from '../utility/workspace';
-import { BrowserBuilderOptions, Builders, ServerBuilderOptions } from '../utility/workspace-models';
+import { Builders } from '../utility/workspace-models';
 import { Schema as AppShellOptions } from './schema';
 
+const APP_SHELL_ROUTE = 'shell';
+
 function getSourceFile(host: Tree, path: string): ts.SourceFile {
-  const buffer = host.read(path);
-  if (!buffer) {
-    throw new SchematicsException(`Could not find ${path}.`);
-  }
-  const content = buffer.toString();
+  const content = host.readText(path);
   const source = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true);
 
   return source;
@@ -82,30 +80,43 @@ function getComponentTemplate(host: Tree, compPath: string, tmplInfo: TemplateIn
     const templateUrl = (tmplInfo.templateUrlProp.initializer as ts.StringLiteral).text;
     const dir = dirname(normalize(compPath));
     const templatePath = join(dir, templateUrl);
-    const buffer = host.read(templatePath);
-    if (buffer) {
-      template = buffer.toString();
-    }
+    try {
+      template = host.readText(templatePath);
+    } catch {}
   }
 
   return template;
 }
 
 function getBootstrapComponentPath(host: Tree, mainPath: string): string {
-  const modulePath = getAppModulePath(host, mainPath);
-  const moduleSource = getSourceFile(host, modulePath);
+  const mainSource = getSourceFile(host, mainPath);
+  const bootstrapAppCall = findBootstrapApplicationCall(mainSource);
 
-  const metadataNode = getDecoratorMetadata(moduleSource, 'NgModule', '@angular/core')[0];
-  const bootstrapProperty = getMetadataProperty(metadataNode, 'bootstrap');
+  let bootstrappingFilePath: string;
+  let bootstrappingSource: ts.SourceFile;
+  let componentName: string;
 
-  const arrLiteral = bootstrapProperty.initializer as ts.ArrayLiteralExpression;
+  if (bootstrapAppCall) {
+    // Standalone Application
+    componentName = bootstrapAppCall.arguments[0].getText();
+    bootstrappingFilePath = mainPath;
+    bootstrappingSource = mainSource;
+  } else {
+    // NgModule Application
+    const modulePath = getAppModulePath(host, mainPath);
+    const moduleSource = getSourceFile(host, modulePath);
+    const metadataNode = getDecoratorMetadata(moduleSource, 'NgModule', '@angular/core')[0];
+    const bootstrapProperty = getMetadataProperty(metadataNode, 'bootstrap');
+    const arrLiteral = bootstrapProperty.initializer as ts.ArrayLiteralExpression;
+    componentName = arrLiteral.elements[0].getText();
+    bootstrappingSource = moduleSource;
+    bootstrappingFilePath = modulePath;
+  }
 
-  const componentSymbol = arrLiteral.elements[0].getText();
-
-  const relativePath = getSourceNodes(moduleSource)
+  const componentRelativeFilePath = getSourceNodes(bootstrappingSource)
     .filter(ts.isImportDeclaration)
     .filter((imp) => {
-      return findNode(imp, ts.SyntaxKind.Identifier, componentSymbol);
+      return findNode(imp, ts.SyntaxKind.Identifier, componentName);
     })
     .map((imp) => {
       const pathStringLiteral = imp.moduleSpecifier as ts.StringLiteral;
@@ -113,51 +124,49 @@ function getBootstrapComponentPath(host: Tree, mainPath: string): string {
       return pathStringLiteral.text;
     })[0];
 
-  return join(dirname(normalize(modulePath)), relativePath + '.ts');
+  return join(dirname(normalize(bootstrappingFilePath)), componentRelativeFilePath + '.ts');
 }
 // end helper functions.
 
 function validateProject(mainPath: string): Rule {
-  return (host: Tree, context: SchematicContext) => {
-    const routerOutletCheckRegex = /<router-outlet.*?>([\s\S]*?)<\/router-outlet>/;
+  return (host: Tree) => {
+    const routerOutletCheckRegex = /<router-outlet.*?>([\s\S]*?)(?:<\/router-outlet>)?/;
 
     const componentPath = getBootstrapComponentPath(host, mainPath);
     const tmpl = getComponentTemplateInfo(host, componentPath);
     const template = getComponentTemplate(host, componentPath, tmpl);
     if (!routerOutletCheckRegex.test(template)) {
-      const errorMsg = `Prerequisite for app shell is to define a router-outlet in your root component.`;
-      context.logger.error(errorMsg);
-      throw new SchematicsException(errorMsg);
+      throw new SchematicsException(
+        `Prerequisite for application shell is to define a router-outlet in your root component.`,
+      );
     }
-  };
-}
-
-function addUniversalTarget(options: AppShellOptions): Rule {
-  return () => {
-    // Copy options.
-    const universalOptions = {
-      ...options,
-    };
-
-    // Delete non-universal options.
-    delete universalOptions.route;
-
-    return schematic('universal', universalOptions);
   };
 }
 
 function addAppShellConfigToWorkspace(options: AppShellOptions): Rule {
   return (host, context) => {
-    if (!options.route) {
-      throw new SchematicsException(`Route is not defined`);
-    }
-
     return updateWorkspace((workspace) => {
       const project = workspace.projects.get(options.project);
       if (!project) {
         return;
       }
 
+      const buildTarget = project.targets.get('build');
+      if (buildTarget?.builder === Builders.Application) {
+        // Application builder configuration.
+        const prodConfig = buildTarget.configurations?.production;
+        if (!prodConfig) {
+          throw new SchematicsException(
+            `A "production" configuration is not defined for the "build" builder.`,
+          );
+        }
+
+        prodConfig.appShell = true;
+
+        return;
+      }
+
+      // Webpack based builders configuration.
       // Validation of targets is handled already in the main function.
       // Duplicate keys means that we have configurations in both server and build builders.
       const serverConfigKeys = project.targets.get('server')?.configurations ?? {};
@@ -197,7 +206,7 @@ function addAppShellConfigToWorkspace(options: AppShellOptions): Rule {
         builder: Builders.AppShell,
         defaultConfiguration: configurations['production'] ? 'production' : undefined,
         options: {
-          route: options.route,
+          route: APP_SHELL_ROUTE,
         },
         configurations,
       });
@@ -239,25 +248,14 @@ function addServerRoutes(options: AppShellOptions): Rule {
   return async (host: Tree) => {
     // The workspace gets updated so this needs to be reloaded
     const workspace = await getWorkspace(host);
-    const clientProject = workspace.projects.get(options.project);
-    if (!clientProject) {
-      throw new Error('Universal schematic removed client project.');
+    const project = workspace.projects.get(options.project);
+    if (!project) {
+      throw new SchematicsException(`Invalid project name (${options.project})`);
     }
-    const clientServerTarget = clientProject.targets.get('server');
-    if (!clientServerTarget) {
-      throw new Error('Universal schematic did not add server target to client project.');
-    }
-    const clientServerOptions = clientServerTarget.options as unknown as ServerBuilderOptions;
-    if (!clientServerOptions) {
-      throw new SchematicsException('Server target does not contain options.');
-    }
-    const modulePath = getServerModulePath(
-      host,
-      clientProject.sourceRoot || 'src',
-      options.main as string,
-    );
+
+    const modulePath = getServerModulePath(host, project.sourceRoot || 'src', 'main.server.ts');
     if (modulePath === null) {
-      throw new SchematicsException('Universal/server module not found.');
+      throw new SchematicsException('Server module not found.');
     }
 
     let moduleSource = getSourceFile(host, modulePath);
@@ -272,7 +270,7 @@ function addServerRoutes(options: AppShellOptions): Rule {
         .filter((node) => node.kind === ts.SyntaxKind.ImportDeclaration)
         .sort((a, b) => a.getStart() - b.getStart());
       const insertPosition = imports[imports.length - 1].getEnd();
-      const routeText = `\n\nconst routes: Routes = [ { path: '${options.route}', component: AppShellComponent }];`;
+      const routeText = `\n\nconst routes: Routes = [ { path: '${APP_SHELL_ROUTE}', component: AppShellComponent }];`;
       recorder.insertRight(insertPosition, routeText);
       host.commitUpdate(recorder);
     }
@@ -305,37 +303,116 @@ function addServerRoutes(options: AppShellOptions): Rule {
   };
 }
 
-function addShellComponent(options: AppShellOptions): Rule {
-  const componentOptions: ComponentOptions = {
-    name: 'app-shell',
-    module: options.rootModuleFileName,
-    project: options.project,
-  };
+function addStandaloneServerRoute(options: AppShellOptions): Rule {
+  return async (host: Tree) => {
+    const workspace = await getWorkspace(host);
+    const project = workspace.projects.get(options.project);
+    if (!project) {
+      throw new SchematicsException(`Project name "${options.project}" doesn't not exist.`);
+    }
 
-  return schematic('component', componentOptions);
+    const configFilePath = join(normalize(project.sourceRoot ?? 'src'), 'app/app.config.server.ts');
+    if (!host.exists(configFilePath)) {
+      throw new SchematicsException(`Cannot find "${configFilePath}".`);
+    }
+
+    let configSourceFile = getSourceFile(host, configFilePath);
+    if (!isImported(configSourceFile, 'ROUTES', '@angular/router')) {
+      const routesChange = insertImport(
+        configSourceFile,
+        configFilePath,
+        'ROUTES',
+        '@angular/router',
+      );
+
+      const recorder = host.beginUpdate(configFilePath);
+      if (routesChange) {
+        applyToUpdateRecorder(recorder, [routesChange]);
+        host.commitUpdate(recorder);
+      }
+    }
+
+    configSourceFile = getSourceFile(host, configFilePath);
+    const providersLiteral = findNodes(configSourceFile, ts.isPropertyAssignment).find(
+      (n) => ts.isArrayLiteralExpression(n.initializer) && n.name.getText() === 'providers',
+    )?.initializer as ts.ArrayLiteralExpression | undefined;
+    if (!providersLiteral) {
+      throw new SchematicsException(
+        `Cannot find the "providers" configuration in "${configFilePath}".`,
+      );
+    }
+
+    // Add route to providers literal.
+    const newProvidersLiteral = ts.factory.updateArrayLiteralExpression(providersLiteral, [
+      ...providersLiteral.elements,
+      ts.factory.createObjectLiteralExpression(
+        [
+          ts.factory.createPropertyAssignment('provide', ts.factory.createIdentifier('ROUTES')),
+          ts.factory.createPropertyAssignment('multi', ts.factory.createIdentifier('true')),
+          ts.factory.createPropertyAssignment(
+            'useValue',
+            ts.factory.createArrayLiteralExpression(
+              [
+                ts.factory.createObjectLiteralExpression(
+                  [
+                    ts.factory.createPropertyAssignment(
+                      'path',
+                      ts.factory.createIdentifier(`'${APP_SHELL_ROUTE}'`),
+                    ),
+                    ts.factory.createPropertyAssignment(
+                      'component',
+                      ts.factory.createIdentifier('AppShellComponent'),
+                    ),
+                  ],
+                  true,
+                ),
+              ],
+              true,
+            ),
+          ),
+        ],
+        true,
+      ),
+    ]);
+
+    const recorder = host.beginUpdate(configFilePath);
+    recorder.remove(providersLiteral.getStart(), providersLiteral.getWidth());
+    const printer = ts.createPrinter();
+    recorder.insertRight(
+      providersLiteral.getStart(),
+      printer.printNode(ts.EmitHint.Unspecified, newProvidersLiteral, configSourceFile),
+    );
+
+    // Add AppShellComponent import
+    const appShellImportChange = insertImport(
+      configSourceFile,
+      configFilePath,
+      'AppShellComponent',
+      './app-shell/app-shell.component',
+    );
+
+    applyToUpdateRecorder(recorder, [appShellImportChange]);
+    host.commitUpdate(recorder);
+  };
 }
 
 export default function (options: AppShellOptions): Rule {
   return async (tree) => {
-    const workspace = await getWorkspace(tree);
-    const clientProject = workspace.projects.get(options.project);
-    if (!clientProject || clientProject.extensions.projectType !== 'application') {
-      throw new SchematicsException(`A client project type of "application" is required.`);
-    }
-    const clientBuildTarget = clientProject.targets.get('build');
-    if (!clientBuildTarget) {
-      throw targetBuildNotFoundError();
-    }
-    const clientBuildOptions = (clientBuildTarget.options ||
-      {}) as unknown as BrowserBuilderOptions;
+    const browserEntryPoint = await getMainFilePath(tree, options.project);
+    const isStandalone = isStandaloneApp(tree, browserEntryPoint);
 
     return chain([
-      validateProject(clientBuildOptions.main),
-      clientProject.targets.has('server') ? noop() : addUniversalTarget(options),
+      validateProject(browserEntryPoint),
+      schematic('server', options),
       addAppShellConfigToWorkspace(options),
-      addRouterModule(clientBuildOptions.main),
-      addServerRoutes(options),
-      addShellComponent(options),
+      isStandalone ? noop() : addRouterModule(browserEntryPoint),
+      isStandalone ? addStandaloneServerRoute(options) : addServerRoutes(options),
+      schematic('component', {
+        name: 'app-shell',
+        module: 'app.module.server.ts',
+        project: options.project,
+        standalone: isStandalone,
+      }),
     ]);
   };
 }

@@ -11,13 +11,20 @@ export enum ProjectType {
   Library = 'library',
 }
 
+/**
+ * An enum of the official Angular builders.
+ * Each enum value provides the fully qualified name of the associated builder.
+ * This enum can be used when analyzing the `builder` fields of project configurations from the
+ * `angular.json` workspace file.
+ */
 export enum Builders {
+  Application = '@angular-devkit/build-angular:application',
   AppShell = '@angular-devkit/build-angular:app-shell',
   Server = '@angular-devkit/build-angular:server',
   Browser = '@angular-devkit/build-angular:browser',
+  BrowserEsbuild = '@angular-devkit/build-angular:browser-esbuild',
   Karma = '@angular-devkit/build-angular:karma',
   TsLint = '@angular-devkit/build-angular:tslint',
-  DeprecatedNgPackagr = '@angular-devkit/build-ng-packagr:build',
   NgPackagr = '@angular-devkit/build-angular:ng-packagr',
   DevServer = '@angular-devkit/build-angular:dev-server',
   ExtractI18n = '@angular-devkit/build-angular:extract-i18n',
@@ -129,10 +136,13 @@ export type ServeBuilderTarget = BuilderTarget<Builders.DevServer, ServeBuilderO
 export type ExtractI18nBuilderTarget = BuilderTarget<Builders.ExtractI18n, ExtractI18nOptions>;
 export type E2EBuilderTarget = BuilderTarget<Builders.Protractor, E2EOptions>;
 
+interface WorkspaceCLISchema {
+  warnings?: Record<string, boolean>;
+  schematicCollections?: string[];
+}
 export interface WorkspaceSchema {
   version: 1;
-  defaultProject?: string;
-  cli?: { warnings?: Record<string, boolean> };
+  cli?: WorkspaceCLISchema;
   projects: {
     [key: string]: WorkspaceProject<ProjectType.Application | ProjectType.Library>;
   };
@@ -148,7 +158,7 @@ export interface WorkspaceProject<TProjectType extends ProjectType = ProjectType
   sourceRoot: string;
   prefix: string;
 
-  cli?: { warnings?: Record<string, boolean> };
+  cli?: WorkspaceCLISchema;
 
   /**
    * Tool options.

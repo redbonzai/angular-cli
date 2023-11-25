@@ -52,7 +52,7 @@ function createTestHost(content: string, onWrite?: (path: string, data: string) 
 
 function getMetadata(workspace: WorkspaceDefinition): JsonWorkspaceMetadata {
   const metadata = (workspace as JsonWorkspaceDefinition)[JsonWorkspaceSymbol];
-  expect(metadata).toBeDefined('JSON metadata not found. Invalid workspace definition returned.');
+  expect(metadata).toBeDefined();
 
   return metadata;
 }
@@ -77,7 +77,6 @@ describe('readJsonWorkpace Parsing', () => {
 
     expect(Array.from(workspace.projects.keys())).toEqual(['my-app', 'my-app-e2e']);
     expect(workspace.extensions['newProjectRoot']).toBe('projects');
-    expect(workspace.extensions['defaultProject']).toBe('my-app');
     expect(workspace.projects.get('my-app')!.extensions['schematics']).toEqual({
       '@schematics/angular:component': { styleext: 'scss' },
     });
@@ -120,12 +119,9 @@ describe('readJsonWorkpace Parsing', () => {
       }
     `);
 
-    try {
-      await readJsonWorkspace('', host);
-      fail();
-    } catch (e) {
-      expect(e.message).toContain('Invalid format version detected');
-    }
+    await expectAsync(readJsonWorkspace('', host)).toBeRejectedWithError(
+      /Invalid format version detected/,
+    );
   });
 
   it('errors on missing version', async () => {
@@ -136,12 +132,24 @@ describe('readJsonWorkpace Parsing', () => {
       }
     `);
 
-    try {
-      await readJsonWorkspace('', host);
-      fail();
-    } catch (e) {
-      expect(e.message).toContain('version specifier not found');
-    }
+    await expectAsync(readJsonWorkspace('', host)).toBeRejectedWithError(
+      /version specifier not found/,
+    );
+  });
+
+  it('warns on missing root property in a project', async () => {
+    const host = createTestHost(stripIndent`
+      {
+        "version": 1,
+        "projects": {
+          "foo": {}
+        }
+      }
+    `);
+
+    await expectAsync(readJsonWorkspace('', host)).toBeRejectedWithError(
+      /Project "foo" is missing a required property "root"/,
+    );
   });
 });
 
@@ -159,10 +167,9 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    const change = metadata.findChangesForPath('/x-baz')[0];
+    const change = metadata.findChangesForPath('/x-baz');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toBe(101);
     }
   });
@@ -184,10 +191,9 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    const change = metadata.findChangesForPath('/x-baz')[0];
+    const change = metadata.findChangesForPath('/x-baz');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual({ a: 1, b: 3, c: { d: 'abc' } });
     }
   });
@@ -216,10 +222,9 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    const change = metadata.findChangesForPath('/x-baz')[0];
+    const change = metadata.findChangesForPath('/x-baz');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual({ a: 1, b: 2, c: { d: 'abc' }, x: 9, y: 8, z: 7 });
     }
   });
@@ -248,10 +253,9 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    const change = metadata.findChangesForPath('/x-baz')[0];
+    const change = metadata.findChangesForPath('/x-baz');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual({ a: 1, b: 2, c: { d: 'abc' }, x: 9, y: 8, z: 7 });
     }
   });
@@ -280,10 +284,9 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    const change = metadata.findChangesForPath('/x-baz')[0];
+    const change = metadata.findChangesForPath('/x-baz');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual({ a: 1, b: 2, c: { d: 'abc' }, x: 9, y: 8, z: 7 });
     }
   });
@@ -310,10 +313,9 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    const change = metadata.findChangesForPath('/x-foo')[0];
+    const change = metadata.findChangesForPath('/x-foo');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('replace');
       expect(change.value).toEqual({ is: ['good', 'great', 'awesome'], x: 9, y: 8, z: 7 });
     }
   });
@@ -323,7 +325,7 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
 
     const workspace = await readJsonWorkspace('', host);
 
-    Object.assign(workspace.extensions['x-foo'], { x: 9, y: 8 }, { z: 7 });
+    Object.assign(workspace.extensions['x-foo']!, { x: 9, y: 8 }, { z: 7 });
     expect(workspace.extensions['x-foo']).toEqual({
       is: ['good', 'great', 'awesome'],
       x: 9,
@@ -336,24 +338,21 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(3);
 
-    let change = metadata.findChangesForPath('/x-foo/x')[0];
+    let change = metadata.findChangesForPath('/x-foo/x');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual(9);
     }
 
-    change = metadata.findChangesForPath('/x-foo/y')[0];
+    change = metadata.findChangesForPath('/x-foo/y');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual(8);
     }
 
-    change = metadata.findChangesForPath('/x-foo/z')[0];
+    change = metadata.findChangesForPath('/x-foo/z');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual(7);
     }
   });
@@ -364,7 +363,7 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     const workspace = await readJsonWorkspace('', host);
 
     workspace.extensions['x-foo'] = Object.assign(
-      workspace.extensions['x-foo'],
+      workspace.extensions['x-foo']!,
       { x: 9, y: 8 },
       { z: 7 },
     );
@@ -380,24 +379,21 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(3);
 
-    let change = metadata.findChangesForPath('/x-foo/x')[0];
+    let change = metadata.findChangesForPath('/x-foo/x');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual(9);
     }
 
-    change = metadata.findChangesForPath('/x-foo/y')[0];
+    change = metadata.findChangesForPath('/x-foo/y');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual(8);
     }
 
-    change = metadata.findChangesForPath('/x-foo/z')[0];
+    change = metadata.findChangesForPath('/x-foo/z');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual(7);
     }
   });
@@ -421,10 +417,9 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    let change = metadata.findChangesForPath('/schematics2')[0];
+    let change = metadata.findChangesForPath('/schematics2');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual({ '@angular/schematics:component': { prefix: 'abc' } });
     }
 
@@ -433,11 +428,8 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(2);
 
-    change = metadata.findChangesForPath('/schematics')[0];
+    change = metadata.findChangesForPath('/schematics');
     expect(change).not.toBeUndefined();
-    if (change) {
-      expect(change.op).toBe('remove');
-    }
   });
 
   it('tracks moving and modifying an existing extension object', async () => {
@@ -459,10 +451,9 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    let change = metadata.findChangesForPath('/schematics2')[0];
+    let change = metadata.findChangesForPath('/schematics2');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual({ '@angular/schematics:component': { prefix: 'abc' } });
     }
 
@@ -474,16 +465,12 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(2);
 
-    change = metadata.findChangesForPath('/schematics')[0];
+    change = metadata.findChangesForPath('/schematics');
     expect(change).not.toBeUndefined();
-    if (change) {
-      expect(change.op).toBe('remove');
-    }
 
-    change = metadata.findChangesForPath('/schematics2')[0];
+    change = metadata.findChangesForPath('/schematics2');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual({ '@angular/schematics:component': { prefix: 'xyz' } });
     }
   });
@@ -507,10 +494,9 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    let change = metadata.findChangesForPath('/schematics2')[0];
+    let change = metadata.findChangesForPath('/schematics2');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual({ '@angular/schematics:component': { prefix: 'abc' } });
     }
 
@@ -521,17 +507,15 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(2);
 
-    change = metadata.findChangesForPath('/schematics/@angular~1schematics:component')[0];
+    change = metadata.findChangesForPath('/schematics/@angular~1schematics:component');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('replace');
       expect(change.value).toEqual({ prefix: 'xyz' });
     }
 
-    change = metadata.findChangesForPath('/schematics2')[0];
+    change = metadata.findChangesForPath('/schematics2');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual({ '@angular/schematics:component': { prefix: 'xyz' } });
     }
   });
@@ -555,10 +539,9 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    let change = metadata.findChangesForPath('/schematics2')[0];
+    let change = metadata.findChangesForPath('/schematics2');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual({ '@angular/schematics:component': { prefix: 'abc' } });
     }
 
@@ -569,17 +552,15 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(2);
 
-    change = metadata.findChangesForPath('/schematics/@angular~1schematics:component')[0];
+    change = metadata.findChangesForPath('/schematics/@angular~1schematics:component');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('replace');
       expect(change.value).toEqual({ prefix: 'xyz' });
     }
 
-    change = metadata.findChangesForPath('/schematics2')[0];
+    change = metadata.findChangesForPath('/schematics2');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual({ '@angular/schematics:component': { prefix: 'xyz' } });
     }
 
@@ -588,18 +569,12 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(2);
 
-    change = metadata.findChangesForPath('/schematics')[0];
+    change = metadata.findChangesForPath('/schematics');
     expect(change).not.toBeUndefined();
-    if (change) {
-      expect(change.op).toBe('remove');
-    }
 
     const orderedChanges = Array.from(metadata.changes.values());
     change = orderedChanges[1];
     expect(change).not.toBeUndefined();
-    if (change) {
-      expect(change.op).toBe('remove');
-    }
   });
 
   it('tracks project additions with set', async () => {
@@ -625,10 +600,9 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    const change = metadata.findChangesForPath('/projects/new-app')[0];
+    const change = metadata.findChangesForPath('/projects/new-app');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual(jasmine.objectContaining({ root: 'src' }));
     }
   });
@@ -655,10 +629,9 @@ describe('JSON WorkspaceDefinition Tracks Workspace Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    const change = metadata.findChangesForPath('/projects/new-app')[0];
+    const change = metadata.findChangesForPath('/projects/new-app');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toEqual(jasmine.objectContaining({ root: 'src' }));
     }
   });
@@ -678,16 +651,14 @@ describe('JSON ProjectDefinition Tracks Project Changes', () => {
 
     project.prefix = 'bar';
     expect(project.prefix).toBe('bar');
-
     const metadata = getMetadata(workspace);
 
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    const change = metadata.findChangesForPath('/projects/my-app/prefix')[0];
+    const change = metadata.findChangesForPath('/projects/my-app/prefix');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('replace');
       expect(change.value).toBe('bar');
     }
   });
@@ -712,10 +683,9 @@ describe('JSON ProjectDefinition Tracks Project Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    const change = metadata.findChangesForPath('/projects/my-app/sourceRoot')[0];
+    const change = metadata.findChangesForPath('/projects/my-app/sourceRoot');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toBe('xyz');
     }
   });
@@ -740,10 +710,9 @@ describe('JSON ProjectDefinition Tracks Project Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    const change = metadata.findChangesForPath('/projects/my-app/abc-option')[0];
+    const change = metadata.findChangesForPath('/projects/my-app/abc-option');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.value).toBe('valueA');
     }
   });
@@ -789,10 +758,9 @@ describe('JSON ProjectDefinition Tracks Project Changes', () => {
     expect(metadata.hasChanges).toBeTruthy();
     expect(metadata.changeCount).toBe(1);
 
-    const change = metadata.findChangesForPath('/projects/p1/targets')[0];
+    const change = metadata.findChangesForPath('/projects/p1/targets');
     expect(change).not.toBeUndefined();
     if (change) {
-      expect(change.op).toBe('add');
       expect(change.type).toBe('targetcollection');
     }
   });

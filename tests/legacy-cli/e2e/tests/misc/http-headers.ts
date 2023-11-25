@@ -24,11 +24,11 @@ export default async function () {
     };
   });
 
-  let errorMessage = null;
+  let errorMessage: string | null = null;
   try {
     await ng('e2e');
   } catch (error) {
-    errorMessage = error.message;
+    errorMessage = error instanceof Error ? error.message : null;
   }
 
   if (!errorMessage) {

@@ -6,9 +6,18 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { analytics, experimental, json, logging } from '@angular-devkit/core';
-import { EMPTY, Subscription } from 'rxjs';
-import { catchError, first, ignoreElements, map, shareReplay } from 'rxjs/operators';
+import { json, logging } from '@angular-devkit/core';
+import {
+  EMPTY,
+  Subscription,
+  catchError,
+  first,
+  firstValueFrom,
+  ignoreElements,
+  lastValueFrom,
+  map,
+  shareReplay,
+} from 'rxjs';
 import {
   BuilderInfo,
   BuilderInput,
@@ -18,6 +27,7 @@ import {
   Target,
   targetStringFromTarget,
 } from './api';
+import { JobOutboundMessageKind, JobState, Scheduler } from './jobs';
 
 const progressSchema = require('./progress-schema.json');
 
@@ -28,11 +38,10 @@ export async function scheduleByName(
   buildOptions: json.JsonObject,
   options: {
     target?: Target;
-    scheduler: experimental.jobs.Scheduler;
+    scheduler: Scheduler;
     logger: logging.LoggerApi;
     workspaceRoot: string | Promise<string>;
     currentDirectory: string | Promise<string>;
-    analytics?: analytics.Analytics;
   },
 ): Promise<BuilderRun> {
   const childLoggerName = options.target ? `{${targetStringFromTarget(options.target)}}` : name;
@@ -43,7 +52,7 @@ export async function scheduleByName(
   const workspaceRoot = await options.workspaceRoot;
   const currentDirectory = await options.currentDirectory;
 
-  const description = await job.description.toPromise();
+  const description = await firstValueFrom(job.description);
   const info = description.info as BuilderInfo;
   const id = ++_uniqueId;
 
@@ -57,34 +66,32 @@ export async function scheduleByName(
   };
 
   // Wait for the job to be ready.
-  if (job.state !== experimental.jobs.JobState.Started) {
-    stateSubscription = job.outboundBus.subscribe(
-      (event) => {
-        if (event.kind === experimental.jobs.JobOutboundMessageKind.Start) {
+  if (job.state !== JobState.Started) {
+    stateSubscription = job.outboundBus.subscribe({
+      next: (event) => {
+        if (event.kind === JobOutboundMessageKind.Start) {
           job.input.next(message);
         }
       },
-      () => {},
-    );
+      error: () => {},
+    });
   } else {
     job.input.next(message);
   }
 
-  const logChannelSub = job.getChannel<logging.LogEntry>('log').subscribe(
-    (entry) => {
+  const logChannelSub = job.getChannel<logging.LogEntry>('log').subscribe({
+    next: (entry) => {
       logger.next(entry);
     },
-    () => {},
-  );
+    error: () => {},
+  });
 
-  const s = job.outboundBus.subscribe({
+  const outboundBusSub = job.outboundBus.subscribe({
     error() {},
     complete() {
-      s.unsubscribe();
+      outboundBusSub.unsubscribe();
       logChannelSub.unsubscribe();
-      if (stateSubscription) {
-        stateSubscription.unsubscribe();
-      }
+      stateSubscription.unsubscribe();
     },
   });
   const output = job.output.pipe(
@@ -94,21 +101,14 @@ export async function scheduleByName(
           ...output,
           ...(options.target ? { target: options.target } : 0),
           info,
-        } as BuilderOutput),
+        } as unknown as BuilderOutput),
     ),
     shareReplay(),
   );
 
-  // If there's an analytics object, take the job channel and report it to the analytics.
-  if (options.analytics) {
-    const reporter = new analytics.AnalyticsReporter(options.analytics);
-    job
-      .getChannel<analytics.AnalyticsReport>('analytics')
-      .subscribe((report) => reporter.report(report));
-  }
   // Start the builder.
   output.pipe(first()).subscribe({
-    error() {},
+    error: () => {},
   });
 
   return {
@@ -116,7 +116,10 @@ export async function scheduleByName(
     info,
     // This is a getter so that it always returns the next output, and not the same one.
     get result() {
-      return output.pipe(first()).toPromise();
+      return firstValueFrom(output);
+    },
+    get lastOutput() {
+      return lastValueFrom(output);
     },
     output,
     progress: job
@@ -139,11 +142,10 @@ export async function scheduleByTarget(
   target: Target,
   overrides: json.JsonObject,
   options: {
-    scheduler: experimental.jobs.Scheduler;
+    scheduler: Scheduler;
     logger: logging.LoggerApi;
     workspaceRoot: string | Promise<string>;
     currentDirectory: string | Promise<string>;
-    analytics?: analytics.Analytics;
   },
 ): Promise<BuilderRun> {
   return scheduleByName(`{${targetStringFromTarget(target)}}`, overrides, {

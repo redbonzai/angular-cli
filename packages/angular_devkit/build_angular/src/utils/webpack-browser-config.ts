@@ -7,16 +7,18 @@
  */
 
 import { BuilderContext } from '@angular-devkit/architect';
-import { getSystemPath, json, logging, normalize, resolve } from '@angular-devkit/core';
+import { logging } from '@angular-devkit/core';
 import * as path from 'path';
-import { ScriptTarget } from 'typescript';
 import { Configuration, javascript } from 'webpack';
 import { merge as webpackMerge } from 'webpack-merge';
 import { Schema as BrowserBuilderSchema } from '../builders/browser/schema';
+import {
+  BuilderWatchPlugin,
+  BuilderWatcherFactory,
+} from '../tools/webpack/plugins/builder-watch-plugin';
 import { NormalizedBrowserBuilderSchema, defaultProgress, normalizeBrowserSchema } from '../utils';
 import { WebpackConfigOptions } from '../utils/build-options';
 import { readTsconfig } from '../utils/read-tsconfig';
-import { BuilderWatchPlugin, BuilderWatcherFactory } from '../webpack/plugins/builder-watch-plugin';
 import { I18nOptions, configureI18nBuild } from './i18n-options';
 
 export type BrowserWebpackConfigOptions = WebpackConfigOptions<NormalizedBrowserBuilderSchema>;
@@ -43,9 +45,6 @@ export async function generateWebpackConfig(
   const tsConfigPath = path.resolve(workspaceRoot, options.tsConfig);
   const tsConfig = await readTsconfig(tsConfigPath);
 
-  const ts = await import('typescript');
-  const scriptTarget = tsConfig.options.target || ts.ScriptTarget.ES5;
-
   const buildOptions: NormalizedBrowserBuilderSchema = { ...options, ...extraBuildOptions };
   const wco: BrowserWebpackConfigOptions = {
     root: workspaceRoot,
@@ -56,7 +55,6 @@ export async function generateWebpackConfig(
     tsConfig,
     tsConfigPath,
     projectName,
-    scriptTarget,
   };
 
   wco.buildOptions.progress = defaultProgress(wco.buildOptions.progress);
@@ -77,16 +75,12 @@ export async function generateI18nBrowserWebpackConfigFromContext(
   projectRoot: string;
   projectSourceRoot?: string;
   i18n: I18nOptions;
-  target: ScriptTarget;
 }> {
   const { buildOptions, i18n } = await configureI18nBuild(context, options);
-  let target = ScriptTarget.ES5;
   const result = await generateBrowserWebpackConfigFromContext(
     buildOptions,
     context,
     (wco) => {
-      target = wco.scriptTarget;
-
       return webpackPartialGenerator(wco);
     },
     extraBuildOptions,
@@ -133,7 +127,7 @@ export async function generateI18nBrowserWebpackConfigFromContext(
     });
   }
 
-  return { ...result, i18n, target };
+  return { ...result, i18n };
 }
 export async function generateBrowserWebpackConfigFromContext(
   options: BrowserBuilderSchema,
@@ -146,26 +140,25 @@ export async function generateBrowserWebpackConfigFromContext(
     throw new Error('The builder requires a target.');
   }
 
-  const workspaceRoot = normalize(context.workspaceRoot);
+  const workspaceRoot = context.workspaceRoot;
   const projectMetadata = await context.getProjectMetadata(projectName);
-  const projectRoot = resolve(workspaceRoot, normalize((projectMetadata.root as string) || ''));
-  const projectSourceRoot = projectMetadata.sourceRoot as string | undefined;
-  const sourceRoot = projectSourceRoot
-    ? resolve(workspaceRoot, normalize(projectSourceRoot))
-    : undefined;
+  const projectRoot = path.join(workspaceRoot, (projectMetadata.root as string | undefined) ?? '');
+  const sourceRoot = projectMetadata.sourceRoot as string | undefined;
+  const projectSourceRoot = sourceRoot ? path.join(workspaceRoot, sourceRoot) : undefined;
 
   const normalizedOptions = normalizeBrowserSchema(
     workspaceRoot,
     projectRoot,
-    sourceRoot,
+    projectSourceRoot,
     options,
     projectMetadata,
+    context.logger,
   );
 
   const config = await generateWebpackConfig(
-    getSystemPath(workspaceRoot),
-    getSystemPath(projectRoot),
-    sourceRoot && getSystemPath(sourceRoot),
+    workspaceRoot,
+    projectRoot,
+    projectSourceRoot,
     projectName,
     normalizedOptions,
     webpackPartialGenerator,
@@ -189,8 +182,8 @@ export async function generateBrowserWebpackConfigFromContext(
 
   return {
     config,
-    projectRoot: getSystemPath(projectRoot),
-    projectSourceRoot: sourceRoot && getSystemPath(sourceRoot),
+    projectRoot,
+    projectSourceRoot,
   };
 }
 

@@ -11,9 +11,10 @@ import { EmittedFiles } from '@angular-devkit/build-webpack';
 import * as fs from 'fs';
 import * as path from 'path';
 import { BundleActionExecutor } from './action-executor';
+import { InlineOptions } from './bundle-inline-options';
 import { copyAssets } from './copy-assets';
+import { assertIsError } from './error';
 import { I18nOptions } from './i18n-options';
-import { InlineOptions } from './process-bundle';
 import { Spinner } from './spinner';
 
 function emittedFilesToInlineOptions(
@@ -21,7 +22,6 @@ function emittedFilesToInlineOptions(
   scriptsEntryPointName: string[],
   emittedPath: string,
   outputPath: string,
-  es5: boolean,
   missingTranslation: 'error' | 'warning' | 'ignore' | undefined,
   context: BuilderContext,
 ): { options: InlineOptions[]; originalFiles: string[] } {
@@ -40,36 +40,18 @@ function emittedFilesToInlineOptions(
     const action: InlineOptions = {
       filename: emittedFile.file,
       code: fs.readFileSync(originalPath, 'utf8'),
-      es5,
       outputPath,
       missingTranslation,
-      setLocale: emittedFile.name === 'main' || emittedFile.name === 'vendor',
+      setLocale: emittedFile.name === 'main',
     };
     originalFiles.push(originalPath);
-
-    // Remove temporary original file as the content has now been read
-    try {
-      fs.unlinkSync(originalPath);
-    } catch (e) {
-      context.logger.debug(
-        `Unable to delete i18n temporary file [${originalPath}]: ${e.toString()}`,
-      );
-    }
 
     try {
       const originalMapPath = originalPath + '.map';
       action.map = fs.readFileSync(originalMapPath, 'utf8');
       originalFiles.push(originalMapPath);
-
-      // Remove temporary original map file as the content has now been read
-      try {
-        fs.unlinkSync(originalMapPath);
-      } catch (e) {
-        context.logger.debug(
-          `Unable to delete i18n temporary file [${originalMapPath}]: ${e.toString()}`,
-        );
-      }
     } catch (err) {
+      assertIsError(err);
       if (err.code !== 'ENOENT') {
         throw err;
       }
@@ -91,7 +73,6 @@ export async function i18nInlineEmittedFiles(
   outputPaths: string[],
   scriptsEntryPointName: string[],
   emittedPath: string,
-  es5: boolean,
   missingTranslation: 'error' | 'warning' | 'ignore' | undefined,
 ): Promise<boolean> {
   const executor = new BundleActionExecutor({ i18n });
@@ -105,7 +86,6 @@ export async function i18nInlineEmittedFiles(
       scriptsEntryPointName,
       emittedPath,
       baseOutputPath,
-      es5,
       missingTranslation,
       context,
     );
@@ -139,6 +119,7 @@ export async function i18nInlineEmittedFiles(
       '',
     );
   } catch (err) {
+    assertIsError(err);
     spinner.fail('Localized bundle generation failed: ' + err.message);
 
     return false;

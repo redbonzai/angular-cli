@@ -4,12 +4,15 @@
 
 ```ts
 
-/// <reference types="node" />
+/// <reference types="@types/node/ts4.8/url" />
+/// <reference types="@types/node/url" />
 
 // @public (undocumented)
 export class NodePackageInstallTask implements TaskConfigurationGenerator<NodePackageTaskOptions> {
     constructor(workingDirectory?: string);
     constructor(options: NodePackageInstallTaskOptions);
+    // (undocumented)
+    allowScripts: boolean;
     // (undocumented)
     hideOutput: boolean;
     // (undocumented)

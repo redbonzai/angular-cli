@@ -1,8 +1,23 @@
-import { ng } from '../../../utils/process';
+import { ng, silentNg } from '../../../utils/process';
 import { expectToFail } from '../../../utils/utils';
 
 export default async function () {
-  await expectToFail(() => ng('config', 'cli.warnings.zzzz'));
+  let ngError: Error;
+
+  ngError = await expectToFail(() => silentNg('config', 'cli.warnings.zzzz', 'true'));
+  if (
+    !ngError.message.includes(
+      'Data path "/cli/warnings" must NOT have additional properties(zzzz).',
+    )
+  ) {
+    throw new Error('Should have failed with must NOT have additional properties(zzzz).');
+  }
+
+  ngError = await expectToFail(() => silentNg('config', 'cli.warnings.zzzz'));
+  if (!ngError.message.includes('Value cannot be found.')) {
+    throw new Error('Should have failed with Value cannot be found.');
+  }
+
   await ng('config', 'cli.warnings.versionMismatch', 'false');
   const { stdout } = await ng('config', 'cli.warnings.versionMismatch');
   if (!stdout.includes('false')) {
@@ -24,17 +39,4 @@ export default async function () {
   await ng('config', 'schematics');
   await ng('config', 'schematics', 'undefined');
   await expectToFail(() => ng('config', 'schematics'));
-
-  /**
-   * `ng config cli.analyticsSharing.uuid ""` should generate new random user ID.
-   * @see: https://angular.io/cli/usage-analytics-gathering#per-user-tracking
-   */
-  await ng('config', 'cli.analyticsSharing.uuid', '');
-  const { stdout: stdout4 } = await ng('config', 'cli.analyticsSharing.uuid');
-  console.log(stdout4);
-  if (!/(?:urn:uuid:)?[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/i.test(stdout4)) {
-    throw new Error(
-      `Expected "cli.analyticsSharing.uuid" to be a UUID, received "${JSON.stringify(stdout4)}".`,
-    );
-  }
 }

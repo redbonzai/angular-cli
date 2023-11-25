@@ -11,7 +11,6 @@ import type { CompilerHost } from '@angular/compiler-cli';
 import { createHash } from 'crypto';
 import * as path from 'path';
 import * as ts from 'typescript';
-import { NgccProcessor } from '../ngcc_processor';
 import { WebpackResourceLoader } from '../resource_loader';
 import { normalizePath } from './paths';
 
@@ -183,62 +182,6 @@ export function augmentHostWithDependencyCollection(
           } else {
             dependencies.set(containingFilePath, new Set([result.resolvedFileName]));
           }
-        }
-
-        return result;
-      });
-    };
-  }
-}
-
-export function augmentHostWithNgcc(
-  host: ts.CompilerHost,
-  ngcc: NgccProcessor,
-  moduleResolutionCache?: ts.ModuleResolutionCache,
-): void {
-  augmentResolveModuleNames(
-    host,
-    (resolvedModule, moduleName) => {
-      if (resolvedModule && ngcc) {
-        ngcc.processModule(moduleName, resolvedModule);
-      }
-
-      return resolvedModule;
-    },
-    moduleResolutionCache,
-  );
-
-  if (host.resolveTypeReferenceDirectives) {
-    const baseResolveTypeReferenceDirectives = host.resolveTypeReferenceDirectives;
-    host.resolveTypeReferenceDirectives = function (names: string[], ...parameters) {
-      return names.map((name) => {
-        const result = baseResolveTypeReferenceDirectives.call(host, [name], ...parameters);
-
-        if (result[0] && ngcc) {
-          ngcc.processModule(name, result[0]);
-        }
-
-        return result[0];
-      });
-    };
-  } else {
-    host.resolveTypeReferenceDirectives = function (
-      moduleNames: string[],
-      containingFile: string,
-      redirectedReference: ts.ResolvedProjectReference | undefined,
-      options: ts.CompilerOptions,
-    ) {
-      return moduleNames.map((name) => {
-        const result = ts.resolveTypeReferenceDirective(
-          name,
-          containingFile,
-          options,
-          host,
-          redirectedReference,
-        ).resolvedTypeReferenceDirective;
-
-        if (result && ngcc) {
-          ngcc.processModule(name, result);
         }
 
         return result;

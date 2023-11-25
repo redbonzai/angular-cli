@@ -7,6 +7,7 @@
  */
 
 import {
+  JsonValue,
   NormalizedRoot,
   Path,
   PathFragment,
@@ -113,6 +114,12 @@ export class ScopedTree implements Tree {
   read(path: string): Buffer | null {
     return this._base.read(this._fullPath(path));
   }
+  readText(path: string): string {
+    return this._base.readText(this._fullPath(path));
+  }
+  readJson(path: string): JsonValue {
+    return this._base.readJson(this._fullPath(path));
+  }
   exists(path: string): boolean {
     return this._base.exists(this._fullPath(path));
   }
@@ -157,7 +164,7 @@ export class ScopedTree implements Tree {
   }
 
   get actions(): Action[] {
-    const scopedActions = [];
+    const scopedActions: Action[] = [];
 
     for (const action of this._base.actions) {
       if (!action.path.startsWith(this._root.scope + '/')) {

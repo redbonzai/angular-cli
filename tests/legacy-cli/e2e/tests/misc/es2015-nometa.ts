@@ -1,17 +1,11 @@
-import { prependToFile, replaceInFile, writeFile } from '../../utils/fs';
+import { prependToFile, replaceInFile } from '../../utils/fs';
 import { ng } from '../../utils/process';
 
-export default async function() {
-  // Ensure an ES2015 build is used in test
-  await writeFile('.browserslistrc', 'Chrome 65');
-
+export default async function () {
   await ng('generate', 'service', 'user');
 
   // Update the application to use the new service
-  await prependToFile(
-    'src/app/app.component.ts',
-    'import { UserService } from \'./user.service\';',
-  );
+  await prependToFile('src/app/app.component.ts', "import { UserService } from './user.service';");
 
   await replaceInFile(
     'src/app/app.component.ts',

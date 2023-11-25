@@ -18,7 +18,7 @@ import {
   template,
   url,
 } from '@angular-devkit/schematics';
-import { getWorkspace, updateWorkspace } from '@schematics/angular/utility/workspace';
+import { readWorkspace, writeWorkspace } from '@schematics/angular/utility';
 import { posix } from 'path';
 import { Readable, Writable } from 'stream';
 import { Schema as PwaOptions } from './schema';
@@ -30,7 +30,11 @@ function updateIndexFile(path: string): Rule {
       throw new SchematicsException(`Could not read index file: ${path}`);
     }
 
-    const rewriter = new (await import('parse5-html-rewriting-stream')).default();
+    const { RewritingStream } = await loadEsmModule<typeof import('parse5-html-rewriting-stream')>(
+      'parse5-html-rewriting-stream',
+    );
+
+    const rewriter = new RewritingStream();
     let needsNoScript = true;
     rewriter.on('startTag', (startTag) => {
       if (startTag.tagName === 'noscript') {
@@ -87,7 +91,7 @@ export default function (options: PwaOptions): Rule {
       options.title = options.project;
     }
 
-    const workspace = await getWorkspace(host);
+    const workspace = await readWorkspace(host);
 
     if (!options.project) {
       throw new SchematicsException('Option "project" is required.');
@@ -110,7 +114,10 @@ export default function (options: PwaOptions): Rule {
     const buildTargets = [];
     const testTargets = [];
     for (const target of project.targets.values()) {
-      if (target.builder === '@angular-devkit/build-angular:browser') {
+      if (
+        target.builder === '@angular-devkit/build-angular:browser' ||
+        target.builder === '@angular-devkit/build-angular:application'
+      ) {
         buildTargets.push(target);
       } else if (target.builder === '@angular-devkit/build-angular:karma') {
         testTargets.push(target);
@@ -158,17 +165,29 @@ export default function (options: PwaOptions): Rule {
     // Setup service worker schematic options
     const { title, ...swOptions } = options;
 
+    await writeWorkspace(host, workspace);
+
     return chain([
-      updateWorkspace(workspace),
       externalSchematic('@schematics/angular', 'service-worker', swOptions),
       mergeWith(apply(url('./files/root'), [template({ ...options }), move(sourcePath)])),
-      mergeWith(
-        apply(url('./files/assets'), [
-          template({ ...options }),
-          move(posix.join(sourcePath, 'assets')),
-        ]),
-      ),
+      mergeWith(apply(url('./files/assets'), [move(posix.join(sourcePath, 'assets'))])),
       ...[...indexFiles].map((path) => updateIndexFile(path)),
     ]);
   };
+}
+
+/**
+ * This uses a dynamic import to load a module which may be ESM.
+ * CommonJS code can load ESM code via a dynamic import. Unfortunately, TypeScript
+ * will currently, unconditionally downlevel dynamic import into a require call.
+ * require calls cannot load ESM code and will result in a runtime error. To workaround
+ * this, a Function constructor is used to prevent TypeScript from changing the dynamic import.
+ * Once TypeScript provides support for keeping the dynamic import this workaround can
+ * be dropped.
+ *
+ * @param modulePath The path of the module to load.
+ * @returns A Promise that resolves to the dynamically imported module.
+ */
+function loadEsmModule<T>(modulePath: string | URL): Promise<T> {
+  return new Function('modulePath', `return import(modulePath);`)(modulePath) as Promise<T>;
 }

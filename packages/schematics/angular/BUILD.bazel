@@ -4,15 +4,10 @@
 # found in the LICENSE file at https://angular.io/license
 
 load("@npm//@bazel/jasmine:index.bzl", "jasmine_node_test")
-load("//tools:defaults.bzl", "ts_library")
+load("//tools:defaults.bzl", "pkg_npm", "ts_library")
 load("//tools:ts_json_schema.bzl", "ts_json_schema")
 
-# @external_begin
-load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
-load("@build_bazel_rules_nodejs//:index.bzl", "pkg_npm")
-# @external_end
-
-licenses(["notice"])  # MIT
+licenses(["notice"])
 
 package(default_visibility = ["//visibility:public"])
 
@@ -47,10 +42,13 @@ ts_library(
         include = ["**/*.ts"],
         exclude = [
             "**/*_spec.ts",
-            "**/*_benchmark.ts",
             # Also exclude templated files.
             "*/files/**/*.ts",
             "*/other-files/**/*.ts",
+            "*/implements-files/**/*",
+            "*/type-files/**/*",
+            "*/functional-files/**/*",
+            "*/class-files/**/*",
             # Exclude test helpers.
             "utility/test/**/*.ts",
             # NB: we need to exclude the nested node_modules that is laid out by yarn workspaces
@@ -60,7 +58,6 @@ ts_library(
         "//packages/schematics/angular:" + src.replace(".json", ".ts")
         for (src, _) in ALL_SCHEMA_TARGETS
     ],
-    # strict_checks = False,
     data = glob(
         include = [
             "collection.json",
@@ -70,6 +67,10 @@ ts_library(
             "*/schema.json",
             "*/files/**/*",
             "*/other-files/**/*",
+            "*/implements-files/**/*",
+            "*/type-files/**/*",
+            "*/functional-files/**/*",
+            "*/class-files/**/*",
         ],
         exclude = [
             # NB: we need to exclude the nested node_modules that is laid out by yarn workspaces
@@ -82,10 +83,9 @@ ts_library(
         "//packages/angular_devkit/schematics",
         "//packages/angular_devkit/schematics/tasks",
         "//packages/schematics/angular/third_party/github.com/Microsoft/TypeScript",
-        "@npm//@types/browserslist",
         "@npm//@types/node",
+        "@npm//browserslist",
         "@npm//jsonc-parser",
-        "@npm//rxjs",
     ],
 )
 
@@ -117,11 +117,10 @@ ts_library(
         "//packages/angular_devkit/core",
         "//packages/angular_devkit/core/node/testing",
         "//packages/angular_devkit/schematics",
+        "//packages/angular_devkit/schematics/tasks",
         "//packages/angular_devkit/schematics/testing",
         "//packages/schematics/angular/third_party/github.com/Microsoft/TypeScript",
-        "@npm//@types/browserslist",
         "@npm//jsonc-parser",
-        "@npm//rxjs",
     ],
     # @external_end
 )
@@ -136,19 +135,26 @@ jasmine_node_test(
     ],
 )
 
-# @external_begin
-pkg_npm(
-    name = "npm_package",
-    deps = [
-        ":angular",
-    ],
+genrule(
+    name = "license",
+    srcs = ["//:LICENSE"],
+    outs = ["LICENSE"],
+    cmd = "cp $(execpath //:LICENSE) $@",
 )
 
-pkg_tar(
-    name = "npm_package_archive",
-    srcs = [":npm_package"],
-    extension = "tar.gz",
-    strip_prefix = "./npm_package",
-    tags = ["manual"],
+pkg_npm(
+    name = "npm_package",
+    pkg_deps = [
+        "//packages/angular_devkit/schematics:package.json",
+        "//packages/angular_devkit/core:package.json",
+    ],
+    tags = ["release-package"],
+    deps = [
+        ":README.md",
+        ":angular",
+        ":license",
+        ":migrations/migration-collection.json",
+        ":utility/latest-versions/package.json",
+        "//packages/schematics/angular/third_party/github.com/Microsoft/TypeScript:LICENSE",
+    ],
 )
-# @external_end

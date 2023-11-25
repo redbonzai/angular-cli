@@ -13,7 +13,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { PackageInfo, packages } from '../lib/packages';
 import build from './build';
-import create from './create';
+import jsonHelp, { createTemporaryProject } from './json-help';
 
 // Added to the README.md of the snapshot. This is markdown.
 const readmeHeaderFn = (pkg: PackageInfo) => `
@@ -130,7 +130,6 @@ async function _publishSnapshot(
 
 export interface SnapshotsOptions {
   force?: boolean;
-  githubTokenFile?: string;
   githubToken?: string;
   branch?: string;
 }
@@ -144,18 +143,14 @@ export default async function (opts: SnapshotsOptions, logger: logging.Logger) {
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'angular-cli-publish-'));
   const message = execSync(`git log --format="%h %s" -n1`).toString().trim();
-  let branch = opts.branch || 'master';
+  let branch = opts.branch || 'main';
 
   // CIRCLE_BRANCH
   if (typeof process.env['CIRCLE_BRANCH'] == 'string') {
     branch = '' + process.env['CIRCLE_BRANCH'];
   }
 
-  const githubToken = (
-    opts.githubToken ||
-    (opts.githubTokenFile && fs.readFileSync(opts.githubTokenFile, 'utf-8')) ||
-    ''
-  ).trim();
+  const githubToken = (opts.githubToken || process.env.SNAPSHOT_BUILDS_GITHUB_TOKEN || '').trim();
 
   if (githubToken) {
     logger.info('Setting up global git name.');
@@ -164,30 +159,15 @@ export default async function (opts: SnapshotsOptions, logger: logging.Logger) {
     _exec('git', ['config', '--global', 'push.default', 'simple'], {}, logger);
   }
 
-  // Creating a new project and reading the help.
-  logger.info('Creating temporary project...');
-  const newProjectTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'angular-cli-create-'));
-  const newProjectName = 'help-project';
-  const newProjectRoot = path.join(newProjectTempRoot, newProjectName);
-  await create({ _: [newProjectName] }, logger.createChild('create'), newProjectTempRoot);
+  // This is needed as otherwise when we run `devkit admin create` after `bazel build` the `dist`
+  // will be overridden with the output of the legacy build.
+  const temporaryProjectRoot = await createTemporaryProject(logger);
 
   // Run build.
   logger.info('Building...');
   await build({ snapshot: true }, logger.createChild('build'));
 
-  logger.info('Gathering JSON Help...');
-  const ngPath = path.join(newProjectRoot, 'node_modules/.bin/ng');
-  const helpOutputRoot = path.join(packages['@angular/cli'].dist, 'help');
-  fs.mkdirSync(helpOutputRoot);
-  const commands = require('../packages/angular/cli/commands.json');
-  for (const commandName of Object.keys(commands)) {
-    const options = { cwd: newProjectRoot };
-    const childLogger = logger.createChild(commandName);
-    const stdout = _exec(ngPath, [commandName, '--help=json'], options, childLogger);
-    // Make sure the output is JSON before printing it, and format it as well.
-    const jsonOutput = JSON.stringify(JSON.parse(stdout.trim()), undefined, 2);
-    fs.writeFileSync(path.join(helpOutputRoot, commandName + '.json'), jsonOutput);
-  }
+  await jsonHelp({ temporaryProjectRoot }, logger);
 
   if (!githubToken) {
     logger.info('No token given, skipping actual publishing...');

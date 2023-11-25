@@ -6,7 +6,10 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { URL } from 'url';
+/**
+ * Lazily compiled dynamic import loader function.
+ */
+let load: (<T>(modulePath: string | URL) => Promise<T>) | undefined;
 
 /**
  * This uses a dynamic import to load a module which may be ESM.
@@ -21,5 +24,10 @@ import { URL } from 'url';
  * @returns A Promise that resolves to the dynamically imported module.
  */
 export function loadEsmModule<T>(modulePath: string | URL): Promise<T> {
-  return new Function('modulePath', `return import(modulePath);`)(modulePath) as Promise<T>;
+  load ??= new Function('modulePath', `return import(modulePath);`) as Exclude<
+    typeof load,
+    undefined
+  >;
+
+  return load(modulePath);
 }

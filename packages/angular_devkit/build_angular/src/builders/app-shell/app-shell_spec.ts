@@ -7,10 +7,7 @@
  */
 
 import { Architect } from '@angular-devkit/architect';
-import { getSystemPath, join, normalize, virtualFs } from '@angular-devkit/core';
-import express from 'express'; // eslint-disable-line import/no-extraneous-dependencies
-import * as http from 'http';
-import { AddressInfo } from 'net';
+import { normalize, virtualFs } from '@angular-devkit/core';
 import { createArchitect, host } from '../../testing/test-utils';
 
 describe('AppShell Builder', () => {
@@ -54,7 +51,6 @@ describe('AppShell Builder', () => {
 
       import { AppRoutingModule } from './app-routing.module';
       import { AppComponent } from './app.component';
-      import { environment } from '../environments/environment';
       import { RouterModule } from '@angular/router';
 
       @NgModule({
@@ -62,7 +58,7 @@ describe('AppShell Builder', () => {
           AppComponent
         ],
         imports: [
-          BrowserModule.withServerTransition({ appId: 'serverApp' }),
+          BrowserModule,
           AppRoutingModule,
           RouterModule
         ],
@@ -71,7 +67,7 @@ describe('AppShell Builder', () => {
       })
       export class AppModule { }
     `,
-    'src/app/app.server.module.ts': `
+    'src/app/app.module.server.ts': `
       import { NgModule } from '@angular/core';
       import { ServerModule } from '@angular/platform-server';
 
@@ -94,15 +90,8 @@ describe('AppShell Builder', () => {
       export class AppServerModule {}
     `,
     'src/main.ts': `
-      import { enableProdMode } from '@angular/core';
       import { platformBrowserDynamic } from '@angular/platform-browser-dynamic';
-
       import { AppModule } from './app/app.module';
-      import { environment } from './environments/environment';
-
-      if (environment.production) {
-        enableProdMode();
-      }
 
       document.addEventListener('DOMContentLoaded', () => {
         platformBrowserDynamic().bootstrapModule(AppModule)
@@ -127,14 +116,6 @@ describe('AppShell Builder', () => {
   };
 
   it('works (basic)', async () => {
-    host.replaceInFile(
-      'src/app/app.module.ts',
-      / {4}BrowserModule/,
-      `
-      BrowserModule.withServerTransition({ appId: 'some-app' })
-    `,
-    );
-
     const run = await architect.scheduleTarget(target);
     const output = await run.result;
     await run.stop();
@@ -143,7 +124,8 @@ describe('AppShell Builder', () => {
 
     const fileName = 'dist/index.html';
     const content = virtualFs.fileBufferToString(host.scopedSync().read(normalize(fileName)));
-    expect(content).toMatch(/Welcome to app!/);
+    expect(content).toMatch('Welcome to app');
+    expect(content).toMatch('ng-server-context="app-shell"');
   });
 
   it('works with route', async () => {
@@ -158,124 +140,6 @@ describe('AppShell Builder', () => {
     const fileName = 'dist/index.html';
     const content = virtualFs.fileBufferToString(host.scopedSync().read(normalize(fileName)));
     expect(content).toContain('app-shell works!');
-  });
-
-  it('works with route and service-worker', async () => {
-    host.writeMultipleFiles(appShellRouteFiles);
-    host.writeMultipleFiles({
-      'src/ngsw-config.json': `
-        {
-          "index": "/index.html",
-          "assetGroups": [{
-            "name": "app",
-            "installMode": "prefetch",
-            "resources": {
-              "files": [
-                "/favicon.ico",
-                "/index.html",
-                "/*.css",
-                "/*.js"
-              ]
-            }
-          }, {
-            "name": "assets",
-            "installMode": "lazy",
-            "updateMode": "prefetch",
-            "resources": {
-              "files": [
-                "/assets/**"
-              ]
-            }
-          }]
-        }
-      `,
-      'src/app/app.module.ts': `
-        import { BrowserModule } from '@angular/platform-browser';
-        import { NgModule } from '@angular/core';
-
-        import { AppRoutingModule } from './app-routing.module';
-        import { AppComponent } from './app.component';
-        import { ServiceWorkerModule } from '@angular/service-worker';
-        import { environment } from '../environments/environment';
-        import { RouterModule } from '@angular/router';
-
-        @NgModule({
-          declarations: [
-            AppComponent
-          ],
-          imports: [
-            BrowserModule.withServerTransition({ appId: 'serverApp' }),
-            AppRoutingModule,
-            ServiceWorkerModule.register('/ngsw-worker.js', { enabled: environment.production }),
-            RouterModule
-          ],
-          providers: [],
-          bootstrap: [AppComponent]
-        })
-        export class AppModule { }
-      `,
-      'e2e/app.e2e-spec.ts': `
-        import { browser, by, element } from 'protractor';
-
-        it('should have ngsw in normal state', () => {
-          browser.get('/');
-          // Wait for service worker to load.
-          browser.sleep(2000);
-          browser.waitForAngularEnabled(false);
-          browser.get('/ngsw/state');
-          // Should have updated, and be in normal state.
-          expect(element(by.css('pre')).getText()).not.toContain('Last update check: never');
-          expect(element(by.css('pre')).getText()).toContain('Driver state: NORMAL');
-        });
-      `,
-    });
-    // This should match the browser target prod config.
-    host.replaceInFile(
-      'angular.json',
-      '"buildOptimizer": true',
-      '"buildOptimizer": true, "serviceWorker": true',
-    );
-
-    // We're changing the workspace file so we need to recreate the Architect instance.
-    architect = (await createArchitect(host.root())).architect;
-
-    const overrides = { route: 'shell' };
-    const run = await architect.scheduleTarget(
-      { ...target, configuration: 'production' },
-      overrides,
-    );
-    const output = await run.result;
-    await run.stop();
-
-    expect(output.success).toBe(true);
-
-    // Make sure the index is pre-rendering the route.
-    const fileName = 'dist/index.html';
-    const content = virtualFs.fileBufferToString(host.scopedSync().read(normalize(fileName)));
-    expect(content).toContain('app-shell works!');
-
-    // Serve the app using a simple static server.
-    const app = express();
-    app.use('/', express.static(getSystemPath(join(host.root(), 'dist')) + '/'));
-    const server = await new Promise<http.Server>((resolve) => {
-      const innerServer = app.listen(0, 'localhost', () => resolve(innerServer));
-    });
-    try {
-      const serverPort = (server.address() as AddressInfo).port;
-      // Load app in protractor, then check service worker status.
-      const protractorRun = await architect.scheduleTarget(
-        { project: 'app-e2e', target: 'e2e' },
-        { baseUrl: `http://localhost:${serverPort}/`, devServerTarget: '' },
-      );
-
-      const protractorOutput = await protractorRun.result;
-      await protractorRun.stop();
-
-      expect(protractorOutput.success).toBe(true);
-    } finally {
-      // Close the express server.
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
   });
 
   it('critical CSS is inlined', async () => {
@@ -296,7 +160,33 @@ describe('AppShell Builder', () => {
     expect(content).toContain('app-shell works!');
     expect(content).toContain('p{color:#000}');
     expect(content).toMatch(
-      /<link rel="stylesheet" href="styles\.[a-z0-9]+\.css" media="print" onload="this\.media='all'">/,
+      /<link rel="stylesheet" href="styles\.[a-z0-9]+\.css" media="print" onload="this.media='all'">/,
+    );
+  });
+
+  it('applies CSP nonce to critical CSS', async () => {
+    host.writeMultipleFiles(appShellRouteFiles);
+    host.replaceInFile('src/index.html', /<app-root/g, '<app-root ngCspNonce="{% nonce %}" ');
+    const overrides = {
+      route: 'shell',
+      browserTarget: 'app:build:production,inline-critical-css',
+    };
+
+    const run = await architect.scheduleTarget(target, overrides);
+    const output = await run.result;
+    await run.stop();
+
+    expect(output.success).toBe(true);
+    const fileName = 'dist/index.html';
+    const content = virtualFs.fileBufferToString(host.scopedSync().read(normalize(fileName)));
+
+    expect(content).toContain('app-shell works!');
+    expect(content).toContain('<style nonce="{% nonce %}">p{color:#000}</style>');
+    expect(content).toContain('<style nonce="{% nonce %}" ng-app-id="ng">');
+    expect(content).toContain('<app-root ngcspnonce="{% nonce %}"');
+    expect(content).toContain('<script nonce="{% nonce %}">');
+    expect(content).toMatch(
+      /<link rel="stylesheet" href="styles\.[a-z0-9]+\.css" media="print" ngCspMedia="all">/,
     );
   });
 });

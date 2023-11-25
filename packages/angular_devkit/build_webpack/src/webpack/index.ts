@@ -8,10 +8,9 @@
 
 import { BuilderContext, BuilderOutput, createBuilder } from '@angular-devkit/architect';
 import { resolve as pathResolve } from 'path';
-import { Observable, from, isObservable, of } from 'rxjs';
-import { switchMap } from 'rxjs/operators';
+import { Observable, from, isObservable, of, switchMap } from 'rxjs';
 import webpack from 'webpack';
-import { EmittedFiles, getEmittedFiles } from '../utils';
+import { EmittedFiles, getEmittedFiles, getWebpackConfig } from '../utils';
 import { Schema as RealWebpackBuilderSchema } from './schema';
 
 export type WebpackBuilderSchema = RealWebpackBuilderSchema;
@@ -59,7 +58,7 @@ export function runWebpack(
     switchMap(
       (webpackCompiler) =>
         new Observable<BuildResult>((obs) => {
-          const callback = (err?: Error, stats?: webpack.Stats) => {
+          const callback = (err?: Error | null, stats?: webpack.Stats) => {
             if (err) {
               return obs.error(err);
             }
@@ -105,7 +104,7 @@ export function runWebpack(
           } catch (err) {
             if (err) {
               context.logger.error(
-                `\nAn error occurred during the build:\n${(err && err.stack) || err}`,
+                `\nAn error occurred during the build:\n${err instanceof Error ? err.stack : err}`,
               );
             }
             throw err;
@@ -118,9 +117,7 @@ export function runWebpack(
 export default createBuilder<WebpackBuilderSchema>((options, context) => {
   const configPath = pathResolve(context.workspaceRoot, options.webpackConfig);
 
-  return from(import(configPath)).pipe(
-    switchMap(({ default: config }: { default: webpack.Configuration }) =>
-      runWebpack(config, context),
-    ),
+  return from(getWebpackConfig(configPath)).pipe(
+    switchMap((config) => runWebpack(config, context)),
   );
 });

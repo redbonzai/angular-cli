@@ -4,11 +4,22 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened]
 
+# Declare default permissions as read only.
+permissions:
+  contents: read
+
 jobs:
   labels:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: angular/dev-infra/github-actions/commit-message-based-labels@c2fb49a44ad9fa77f508010f950524ee97f5e8d5
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: angular/dev-infra/github-actions/commit-message-based-labels@8d620dd288dcde4cb2122afb4eddad246ceae780
+        with:
+          angular-robot-key: ${{ secrets.ANGULAR_ROBOT_PRIVATE_KEY }}
+  post_approval_changes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: angular/dev-infra/github-actions/post-approval-changes@8d620dd288dcde4cb2122afb4eddad246ceae780
         with:
           angular-robot-key: ${{ secrets.ANGULAR_ROBOT_PRIVATE_KEY }}

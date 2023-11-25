@@ -1,11 +1,6 @@
+load("@npm//@angular/build-tooling/bazel/api-golden:index.bzl", "api_golden_test_npm_package")
 load("@npm//@bazel/jasmine:index.bzl", "jasmine_node_test")
-load("//tools:defaults.bzl", "ts_library")
-
-# @external_begin
-load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
-load("@build_bazel_rules_nodejs//:index.bzl", "pkg_npm")
-load("@npm//@angular/dev-infra-private/bazel/api-golden:index.bzl", "api_golden_test_npm_package")
-# @external_end
+load("//tools:defaults.bzl", "pkg_npm", "ts_library")
 
 # Copyright Google Inc. All Rights Reserved.
 #
@@ -24,28 +19,24 @@ ts_library(
         include = ["src/**/*.ts"],
         exclude = [
             "src/**/*_spec.ts",
-            "src/**/*_benchmark.ts",
         ],
     ),
-    # The attribute below is needed in g3 to turn off strict typechecking
-    # strict_checks = False,
-    data = glob(
-        include = ["**/*.json"],
-        exclude = [
-            # NB: we need to exclude the nested node_modules that is laid out by yarn workspaces
-            "node_modules/**",
-        ],
-    ),
+    data = [
+        "package.json",
+    ],
     module_name = "@angular-devkit/schematics",
     module_root = "src/index.d.ts",
     deps = [
         "//packages/angular_devkit/core",
         "//packages/angular_devkit/core/node",  # TODO: get rid of this for 6.0
         "@npm//@types/node",
+        "@npm//jsonc-parser",
         "@npm//magic-string",
         "@npm//rxjs",
     ],
 )
+
+# @external_begin
 
 ts_library(
     name = "schematics_test_lib",
@@ -69,23 +60,30 @@ jasmine_node_test(
     ],
 )
 
-# @external_begin
-pkg_npm(
-    name = "npm_package",
-    deps = [
-        ":schematics",
-        "//packages/angular_devkit/schematics/tasks",
-        "//packages/angular_devkit/schematics/testing",
-        "//packages/angular_devkit/schematics/tools",
-    ],
+genrule(
+    name = "license",
+    srcs = ["//:LICENSE"],
+    outs = ["LICENSE"],
+    cmd = "cp $(execpath //:LICENSE) $@",
 )
 
-pkg_tar(
-    name = "npm_package_archive",
-    srcs = [":npm_package"],
-    extension = "tar.gz",
-    strip_prefix = "./npm_package",
-    tags = ["manual"],
+pkg_npm(
+    name = "npm_package",
+    pkg_deps = [
+        "//packages/angular_devkit/core:package.json",
+    ],
+    tags = ["release-package"],
+    deps = [
+        ":README.md",
+        ":collection-schema.json",
+        ":license",
+        ":schematics",
+        "//packages/angular_devkit/schematics/tasks",
+        "//packages/angular_devkit/schematics/tasks:package.json",
+        "//packages/angular_devkit/schematics/testing",
+        "//packages/angular_devkit/schematics/testing:package.json",
+        "//packages/angular_devkit/schematics/tools:package.json",
+    ],
 )
 
 api_golden_test_npm_package(

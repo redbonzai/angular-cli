@@ -23,7 +23,7 @@ describe('Ng New Schematic', () => {
   it('should create files of a workspace', async () => {
     const options = { ...defaultOptions };
 
-    const tree = await schematicRunner.runSchematicAsync('ng-new', options).toPromise();
+    const tree = await schematicRunner.runSchematic('ng-new', options);
     const files = tree.files;
     expect(files).toContain('/bar/angular.json');
   });
@@ -31,7 +31,23 @@ describe('Ng New Schematic', () => {
   it('should create files of an application', async () => {
     const options = { ...defaultOptions };
 
-    const tree = await schematicRunner.runSchematicAsync('ng-new', options).toPromise();
+    const tree = await schematicRunner.runSchematic('ng-new', options);
+    const files = tree.files;
+    expect(files).toEqual(
+      jasmine.arrayContaining([
+        '/bar/tsconfig.app.json',
+        '/bar/src/main.ts',
+        '/bar/src/app/app.config.ts',
+      ]),
+    );
+
+    expect(files).not.toEqual(jasmine.arrayContaining(['/bar/src/app/app.module.ts']));
+  });
+
+  it('should create module files of a standalone=false application', async () => {
+    const options = { ...defaultOptions, standalone: false };
+
+    const tree = await schematicRunner.runSchematic('ng-new', options);
     const files = tree.files;
     expect(files).toEqual(
       jasmine.arrayContaining([
@@ -45,18 +61,19 @@ describe('Ng New Schematic', () => {
   it('should should set the prefix in angular.json and in app.component.ts', async () => {
     const options = { ...defaultOptions, prefix: 'pre' };
 
-    const tree = await schematicRunner.runSchematicAsync('ng-new', options).toPromise();
+    const tree = await schematicRunner.runSchematic('ng-new', options);
     const content = tree.readContent('/bar/angular.json');
     expect(content).toMatch(/"prefix": "pre"/);
   });
 
-  it('should set up the app module', async () => {
+  it('should set up the app module when standalone=false', async () => {
     const options: NgNewOptions = {
       name: 'foo',
       version: '6.0.0',
+      standalone: false,
     };
 
-    const tree = await schematicRunner.runSchematicAsync('ng-new', options).toPromise();
+    const tree = await schematicRunner.runSchematic('ng-new', options);
     const moduleContent = tree.readContent('/foo/src/app/app.module.ts');
     expect(moduleContent).toMatch(/declarations:\s*\[\s*AppComponent\s*\]/m);
   });
@@ -64,7 +81,7 @@ describe('Ng New Schematic', () => {
   it('createApplication=false should create an empty workspace', async () => {
     const options = { ...defaultOptions, createApplication: false };
 
-    const tree = await schematicRunner.runSchematicAsync('ng-new', options).toPromise();
+    const tree = await schematicRunner.runSchematic('ng-new', options);
     const files = tree.files;
     expect(files).toContain('/bar/angular.json');
     expect(files).not.toContain('/bar/src');
@@ -73,15 +90,16 @@ describe('Ng New Schematic', () => {
   it('minimal=true should not create an e2e target', async () => {
     const options = { ...defaultOptions, minimal: true };
 
-    const tree = await schematicRunner.runSchematicAsync('ng-new', options).toPromise();
+    const tree = await schematicRunner.runSchematic('ng-new', options);
     const confContent = JSON.parse(tree.readContent('/bar/angular.json'));
     expect(confContent.projects.foo.e2e).toBeUndefined();
   });
 
   it('should add packageManager option in angular.json', async () => {
-    const tree = await schematicRunner
-      .runSchematicAsync('ng-new', { ...defaultOptions, packageManager: 'npm' })
-      .toPromise();
+    const tree = await schematicRunner.runSchematic('ng-new', {
+      ...defaultOptions,
+      packageManager: 'npm',
+    });
     const { cli } = JSON.parse(tree.readContent('/bar/angular.json'));
     expect(cli.packageManager).toBe('npm');
   });

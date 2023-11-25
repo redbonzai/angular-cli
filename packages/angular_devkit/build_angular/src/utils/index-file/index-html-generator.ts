@@ -14,17 +14,21 @@ import { stripBom } from '../strip-bom';
 import { CrossOriginValue, Entrypoint, FileInfo, augmentIndexHtml } from './augment-index-html';
 import { InlineCriticalCssProcessor } from './inline-critical-css';
 import { InlineFontsProcessor } from './inline-fonts';
+import { addStyleNonce } from './style-nonce';
 
 type IndexHtmlGeneratorPlugin = (
   html: string,
   options: IndexHtmlGeneratorProcessOptions,
 ) => Promise<string | IndexHtmlTransformResult>;
 
+export type HintMode = 'prefetch' | 'preload' | 'modulepreload' | 'preconnect' | 'dns-prefetch';
+
 export interface IndexHtmlGeneratorProcessOptions {
   lang: string | undefined;
   baseHref: string | undefined;
   outputPath: string;
   files: FileInfo[];
+  hints?: { url: string; mode: HintMode; as?: string }[];
 }
 
 export interface IndexHtmlGeneratorOptions {
@@ -36,6 +40,7 @@ export interface IndexHtmlGeneratorOptions {
   crossOrigin?: CrossOriginValue;
   optimization?: NormalizedOptimizationOptions;
   cache?: NormalizedCachedOptions;
+  imageDomains?: string[];
 }
 
 export type IndexHtmlTransform = (content: string) => Promise<string>;
@@ -59,7 +64,14 @@ export class IndexHtmlGenerator {
       extraPlugins.push(inlineCriticalCssPlugin(this));
     }
 
-    this.plugins = [augmentIndexHtmlPlugin(this), ...extraPlugins, postTransformPlugin(this)];
+    this.plugins = [
+      augmentIndexHtmlPlugin(this),
+      ...extraPlugins,
+      // Runs after the `extraPlugins` to capture any nonce or
+      // `style` tags that might've been added by them.
+      addStyleNoncePlugin(),
+      postTransformPlugin(this),
+    ];
   }
 
   async process(options: IndexHtmlGeneratorProcessOptions): Promise<IndexHtmlTransformResult> {
@@ -101,10 +113,10 @@ export class IndexHtmlGenerator {
 }
 
 function augmentIndexHtmlPlugin(generator: IndexHtmlGenerator): IndexHtmlGeneratorPlugin {
-  const { deployUrl, crossOrigin, sri = false, entrypoints } = generator.options;
+  const { deployUrl, crossOrigin, sri = false, entrypoints, imageDomains } = generator.options;
 
   return async (html, options) => {
-    const { lang, baseHref, outputPath = '', files } = options;
+    const { lang, baseHref, outputPath = '', files, hints } = options;
 
     return augmentIndexHtml({
       html,
@@ -115,7 +127,9 @@ function augmentIndexHtmlPlugin(generator: IndexHtmlGenerator): IndexHtmlGenerat
       lang,
       entrypoints,
       loadOutputFile: (filePath) => generator.readAsset(join(outputPath, filePath)),
+      imageDomains,
       files,
+      hints,
     });
   };
 }
@@ -137,6 +151,10 @@ function inlineCriticalCssPlugin(generator: IndexHtmlGenerator): IndexHtmlGenera
 
   return async (html, options) =>
     inlineCriticalCssProcessor.process(html, { outputPath: options.outputPath });
+}
+
+function addStyleNoncePlugin(): IndexHtmlGeneratorPlugin {
+  return (html) => addStyleNonce(html);
 }
 
 function postTransformPlugin({ options }: IndexHtmlGenerator): IndexHtmlGeneratorPlugin {

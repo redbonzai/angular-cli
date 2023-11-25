@@ -11,7 +11,6 @@ import { WorkspaceNodeModulesArchitectHost } from '@angular-devkit/architect/nod
 import { TestingArchitectHost } from '@angular-devkit/architect/testing';
 import { schema, workspaces } from '@angular-devkit/core';
 import { NodeJsSyncHost } from '@angular-devkit/core/node';
-import fetch from 'node-fetch'; // eslint-disable-line import/no-extraneous-dependencies
 import * as path from 'path';
 import { DevServerBuildOutput } from './index';
 
@@ -47,12 +46,27 @@ describe('Dev Server Builder', () => {
     await createArchitect(workspaceRoot);
   });
 
-  it('works', async () => {
-    const run = await architect.scheduleTarget(webpackTargetSpec);
+  it('works with CJS config', async () => {
+    const run = await architect.scheduleTarget(webpackTargetSpec, {
+      webpackConfig: 'webpack.config.cjs',
+    });
     const output = (await run.result) as DevServerBuildOutput;
     expect(output.success).toBe(true);
 
-    const response = await fetch(`http://${output.address}:${output.port}/bundle.js`);
+    const response = await fetch(`http://localhost:${output.port}/bundle.js`);
+    expect(await response.text()).toContain(`console.log('hello world')`);
+
+    await run.stop();
+  }, 30000);
+
+  it('works with ESM config', async () => {
+    const run = await architect.scheduleTarget(webpackTargetSpec, {
+      webpackConfig: 'webpack.config.mjs',
+    });
+    const output = (await run.result) as DevServerBuildOutput;
+    expect(output.success).toBe(true);
+
+    const response = await fetch(`http://localhost:${output.port}/bundle.js`);
     expect(await response.text()).toContain(`console.log('hello world')`);
 
     await run.stop();

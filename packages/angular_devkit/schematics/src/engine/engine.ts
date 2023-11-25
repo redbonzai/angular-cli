@@ -7,8 +7,7 @@
  */
 
 import { BaseException, PriorityQueue, logging } from '@angular-devkit/core';
-import { Observable, from as observableFrom } from 'rxjs';
-import { concatMap } from 'rxjs/operators';
+import { Observable, concatMap, from as observableFrom } from 'rxjs';
 import { Url } from 'url';
 import { MergeStrategy } from '../tree/interface';
 import { NullTree } from '../tree/null';
@@ -83,7 +82,8 @@ export class UnknownTaskDependencyException extends BaseException {
 }
 
 export class CollectionImpl<CollectionT extends object, SchematicT extends object>
-  implements Collection<CollectionT, SchematicT> {
+  implements Collection<CollectionT, SchematicT>
+{
   constructor(
     private _description: CollectionDescription<CollectionT>,
     private _engine: SchematicEngine<CollectionT, SchematicT>,
@@ -101,8 +101,8 @@ export class CollectionImpl<CollectionT extends object, SchematicT extends objec
     return this._engine.createSchematic(name, this, allowPrivate);
   }
 
-  listSchematicNames(): string[] {
-    return this._engine.listSchematicNames(this);
+  listSchematicNames(includeHidden?: boolean): string[] {
+    return this._engine.listSchematicNames(this, includeHidden);
   }
 }
 
@@ -140,7 +140,7 @@ export class TaskScheduler {
     return new Set(tasks);
   }
 
-  schedule<T>(taskConfiguration: TaskConfiguration<T>): TaskId {
+  schedule<T extends object>(taskConfiguration: TaskConfiguration<T>): TaskId {
     const dependencies = this._mapDependencies(taskConfiguration.dependencies);
     const priority = this._calculatePriority(dependencies);
 
@@ -169,7 +169,8 @@ export class TaskScheduler {
 }
 
 export class SchematicEngine<CollectionT extends object, SchematicT extends object>
-  implements Engine<CollectionT, SchematicT> {
+  implements Engine<CollectionT, SchematicT>
+{
   private _collectionCache = new Map<string, CollectionImpl<CollectionT, SchematicT>>();
   private _schematicCache = new WeakMap<
     Collection<CollectionT, SchematicT>,
@@ -273,7 +274,10 @@ export class SchematicEngine<CollectionT extends object, SchematicT extends obje
     const host = this._host;
     this._taskSchedulers.push(taskScheduler);
 
-    function addTask<T>(task: TaskConfigurationGenerator<T>, dependencies?: Array<TaskId>): TaskId {
+    function addTask<T extends object>(
+      task: TaskConfigurationGenerator<T>,
+      dependencies?: Array<TaskId>,
+    ): TaskId {
       const config = task.toConfiguration();
 
       if (!host.hasTaskExecutor(config.name)) {
@@ -333,12 +337,15 @@ export class SchematicEngine<CollectionT extends object, SchematicT extends obje
     return schematic;
   }
 
-  listSchematicNames(collection: Collection<CollectionT, SchematicT>): string[] {
-    const names = this._host.listSchematicNames(collection.description);
+  listSchematicNames(
+    collection: Collection<CollectionT, SchematicT>,
+    includeHidden?: boolean,
+  ): string[] {
+    const names = this._host.listSchematicNames(collection.description, includeHidden);
 
     if (collection.baseDescriptions) {
       for (const base of collection.baseDescriptions) {
-        names.push(...this._host.listSchematicNames(base));
+        names.push(...this._host.listSchematicNames(base, includeHidden));
       }
     }
 

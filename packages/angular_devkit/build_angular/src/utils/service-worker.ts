@@ -6,36 +6,38 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { Path, getSystemPath, normalize } from '@angular-devkit/core';
 import type { Config, Filesystem } from '@angular/service-worker/config';
 import * as crypto from 'crypto';
-import { createReadStream, promises as fs, constants as fsConstants } from 'fs';
+import { existsSync, constants as fsConstants, promises as fsPromises } from 'node:fs';
 import * as path from 'path';
-import { pipeline } from 'stream';
+import { BuildOutputFile, BuildOutputFileType } from '../tools/esbuild/bundler-context';
+import { BuildOutputAsset } from '../tools/esbuild/bundler-execution-result';
+import { assertIsError } from './error';
 import { loadEsmModule } from './load-esm';
 
 class CliFilesystem implements Filesystem {
-  constructor(private base: string) {}
+  constructor(
+    private fs: typeof fsPromises,
+    private base: string,
+  ) {}
 
   list(dir: string): Promise<string[]> {
     return this._recursiveList(this._resolve(dir), []);
   }
 
   read(file: string): Promise<string> {
-    return fs.readFile(this._resolve(file), 'utf-8');
+    return this.fs.readFile(this._resolve(file), 'utf-8');
   }
 
-  hash(file: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const hash = crypto.createHash('sha1').setEncoding('hex');
-      pipeline(createReadStream(this._resolve(file)), hash, (error) =>
-        error ? reject(error) : resolve(hash.read()),
-      );
-    });
+  async hash(file: string): Promise<string> {
+    return crypto
+      .createHash('sha1')
+      .update(await this.fs.readFile(this._resolve(file)))
+      .digest('hex');
   }
 
-  write(file: string, content: string): Promise<void> {
-    return fs.writeFile(this._resolve(file), content);
+  write(_file: string, _content: string): never {
+    throw new Error('This should never happen.');
   }
 
   private _resolve(file: string): string {
@@ -44,12 +46,15 @@ class CliFilesystem implements Filesystem {
 
   private async _recursiveList(dir: string, items: string[]): Promise<string[]> {
     const subdirectories = [];
-    for await (const entry of await fs.opendir(dir)) {
-      if (entry.isFile()) {
+    for (const entry of await this.fs.readdir(dir)) {
+      const entryPath = path.join(dir, entry);
+      const stats = await this.fs.stat(entryPath);
+
+      if (stats.isFile()) {
         // Uses posix paths since the service worker expects URLs
-        items.push('/' + path.relative(this.base, path.join(dir, entry.name)).replace(/\\/g, '/'));
-      } else if (entry.isDirectory()) {
-        subdirectories.push(path.join(dir, entry.name));
+        items.push('/' + path.relative(this.base, entryPath).replace(/\\/g, '/'));
+      } else if (stats.isDirectory()) {
+        subdirectories.push(entryPath);
       }
     }
 
@@ -61,29 +66,85 @@ class CliFilesystem implements Filesystem {
   }
 }
 
+class ResultFilesystem implements Filesystem {
+  private readonly fileReaders = new Map<string, () => Promise<Uint8Array>>();
+
+  constructor(
+    outputFiles: BuildOutputFile[],
+    assetFiles: { source: string; destination: string }[],
+  ) {
+    for (const file of outputFiles) {
+      if (file.type === BuildOutputFileType.Media || file.type === BuildOutputFileType.Browser) {
+        this.fileReaders.set('/' + file.path.replace(/\\/g, '/'), async () => file.contents);
+      }
+    }
+    for (const file of assetFiles) {
+      this.fileReaders.set('/' + file.destination.replace(/\\/g, '/'), () =>
+        fsPromises.readFile(file.source),
+      );
+    }
+  }
+
+  async list(dir: string): Promise<string[]> {
+    if (dir !== '/') {
+      throw new Error('Serviceworker manifest generator should only list files from root.');
+    }
+
+    return [...this.fileReaders.keys()];
+  }
+
+  async read(file: string): Promise<string> {
+    const reader = this.fileReaders.get(file);
+    if (reader === undefined) {
+      throw new Error('File does not exist.');
+    }
+    const contents = await reader();
+
+    return Buffer.from(contents.buffer, contents.byteOffset, contents.byteLength).toString('utf-8');
+  }
+
+  async hash(file: string): Promise<string> {
+    const reader = this.fileReaders.get(file);
+    if (reader === undefined) {
+      throw new Error('File does not exist.');
+    }
+
+    return crypto
+      .createHash('sha1')
+      .update(await reader())
+      .digest('hex');
+  }
+
+  write(): never {
+    throw new Error('Serviceworker manifest generator should not attempted to write.');
+  }
+}
+
 export async function augmentAppWithServiceWorker(
-  appRoot: Path,
-  outputPath: Path,
+  appRoot: string,
+  workspaceRoot: string,
+  outputPath: string,
   baseHref: string,
   ngswConfigPath?: string,
+  inputputFileSystem = fsPromises,
+  outputFileSystem = fsPromises,
 ): Promise<void> {
-  const distPath = getSystemPath(normalize(outputPath));
-
   // Determine the configuration file path
   const configPath = ngswConfigPath
-    ? getSystemPath(normalize(ngswConfigPath))
-    : path.join(getSystemPath(appRoot), 'ngsw-config.json');
+    ? path.join(workspaceRoot, ngswConfigPath)
+    : path.join(appRoot, 'ngsw-config.json');
 
   // Read the configuration file
   let config: Config | undefined;
   try {
-    const configurationData = await fs.readFile(configPath, 'utf-8');
+    const configurationData = await inputputFileSystem.readFile(configPath, 'utf-8');
     config = JSON.parse(configurationData) as Config;
   } catch (error) {
+    assertIsError(error);
     if (error.code === 'ENOENT') {
       throw new Error(
         'Error: Expected to find an ngsw-config.json configuration file' +
-          ` in the ${getSystemPath(appRoot)} folder. Either provide one or` +
+          ` in the ${appRoot} folder. Either provide one or` +
           ' disable Service Worker in the angular.json configuration file.',
       );
     } else {
@@ -91,6 +152,68 @@ export async function augmentAppWithServiceWorker(
     }
   }
 
+  const result = await augmentAppWithServiceWorkerCore(
+    config,
+    new CliFilesystem(outputFileSystem, outputPath),
+    baseHref,
+  );
+
+  const copy = async (src: string, dest: string): Promise<void> => {
+    const resolvedDest = path.join(outputPath, dest);
+
+    return inputputFileSystem === outputFileSystem
+      ? // Native FS (Builder).
+        inputputFileSystem.copyFile(src, resolvedDest, fsConstants.COPYFILE_FICLONE)
+      : // memfs (Webpack): Read the file from the input FS (disk) and write it to the output FS (memory).
+        outputFileSystem.writeFile(resolvedDest, await inputputFileSystem.readFile(src));
+  };
+
+  await outputFileSystem.writeFile(path.join(outputPath, 'ngsw.json'), result.manifest);
+
+  for (const { source, destination } of result.assetFiles) {
+    await copy(source, destination);
+  }
+}
+
+// This is currently used by the esbuild-based builder
+export async function augmentAppWithServiceWorkerEsbuild(
+  workspaceRoot: string,
+  configPath: string,
+  baseHref: string,
+  outputFiles: BuildOutputFile[],
+  assetFiles: BuildOutputAsset[],
+): Promise<{ manifest: string; assetFiles: BuildOutputAsset[] }> {
+  // Read the configuration file
+  let config: Config | undefined;
+  try {
+    const configurationData = await fsPromises.readFile(configPath, 'utf-8');
+    config = JSON.parse(configurationData) as Config;
+  } catch (error) {
+    assertIsError(error);
+    if (error.code === 'ENOENT') {
+      // TODO: Generate an error object that can be consumed by the esbuild-based builder
+      const message = `Service worker configuration file "${path.relative(
+        workspaceRoot,
+        configPath,
+      )}" could not be found.`;
+      throw new Error(message);
+    } else {
+      throw error;
+    }
+  }
+
+  return augmentAppWithServiceWorkerCore(
+    config,
+    new ResultFilesystem(outputFiles, assetFiles),
+    baseHref,
+  );
+}
+
+export async function augmentAppWithServiceWorkerCore(
+  config: Config,
+  serviceWorkerFilesystem: Filesystem,
+  baseHref: string,
+): Promise<{ manifest: string; assetFiles: { source: string; destination: string }[] }> {
   // Load ESM `@angular/service-worker/config` using the TypeScript dynamic import workaround.
   // Once TypeScript provides support for keeping the dynamic import this workaround can be
   // changed to a direct dynamic import.
@@ -101,39 +224,27 @@ export async function augmentAppWithServiceWorker(
   ).Generator;
 
   // Generate the manifest
-  const generator = new GeneratorConstructor(new CliFilesystem(distPath), baseHref);
+  const generator = new GeneratorConstructor(serviceWorkerFilesystem, baseHref);
   const output = await generator.process(config);
 
   // Write the manifest
   const manifest = JSON.stringify(output, null, 2);
-  await fs.writeFile(path.join(distPath, 'ngsw.json'), manifest);
 
   // Find the service worker package
   const workerPath = require.resolve('@angular/service-worker/ngsw-worker.js');
 
-  // Write the worker code
-  await fs.copyFile(
-    workerPath,
-    path.join(distPath, 'ngsw-worker.js'),
-    fsConstants.COPYFILE_FICLONE,
-  );
+  const result = {
+    manifest,
+    // Main worker code
+    assetFiles: [{ source: workerPath, destination: 'ngsw-worker.js' }],
+  };
 
   // If present, write the safety worker code
   const safetyPath = path.join(path.dirname(workerPath), 'safety-worker.js');
-  try {
-    await fs.copyFile(
-      safetyPath,
-      path.join(distPath, 'worker-basic.min.js'),
-      fsConstants.COPYFILE_FICLONE,
-    );
-    await fs.copyFile(
-      safetyPath,
-      path.join(distPath, 'safety-worker.js'),
-      fsConstants.COPYFILE_FICLONE,
-    );
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
-    }
+  if (existsSync(safetyPath)) {
+    result.assetFiles.push({ source: safetyPath, destination: 'worker-basic.min.js' });
+    result.assetFiles.push({ source: safetyPath, destination: 'safety-worker.js' });
   }
+
+  return result;
 }

@@ -4,7 +4,7 @@ import { updateJsonFile } from '../../utils/project';
 import { expectToFail } from '../../utils/utils';
 
 export default async function () {
-  await updateJsonFile('angular.json', workspace => {
+  await updateJsonFile('angular.json', (workspace) => {
     const build = workspace.projects['test-project'].architect.build;
     build.defaultConfiguration = undefined;
     build.options = {
@@ -17,11 +17,11 @@ export default async function () {
   });
 
   await ng('build');
-  await expectFileToExist('dist/test-project/main.js');
-  await expectFileToExist('dist/test-project/main.js.map');
+  await expectFileToExist('dist/test-project/browser/main.js');
+  await expectFileToExist('dist/test-project/browser/main.js.map');
 
   // Add new configuration and set "defaultConfiguration"
-  await updateJsonFile('angular.json', workspace => {
+  await updateJsonFile('angular.json', (workspace) => {
     const build = workspace.projects['test-project'].architect.build;
     build.defaultConfiguration = 'foo';
     build.configurations.foo = {
@@ -30,6 +30,6 @@ export default async function () {
   });
 
   await ng('build');
-  await expectFileToExist('dist/test-project/main.js');
-  await expectToFail(() => expectFileToExist('dist/test-project/main.js.map'));
+  await expectFileToExist('dist/test-project/browser/main.js');
+  await expectToFail(() => expectFileToExist('dist/test-project/browser/main.js.map'));
 }

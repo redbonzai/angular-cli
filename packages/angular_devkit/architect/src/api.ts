@@ -6,10 +6,10 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { analytics, experimental, json, logging } from '@angular-devkit/core';
-import { Observable, SubscribableOrPromise, Subscriber, from } from 'rxjs';
-import { switchMap } from 'rxjs/operators';
+import { json, logging } from '@angular-devkit/core';
+import { Observable, ObservableInput, Subscriber, from, switchMap } from 'rxjs';
 import { Schema as RealBuilderInput, Target as RealTarget } from './input-schema';
+import { Registry } from './jobs';
 import { Schema as RealBuilderOutput } from './output-schema';
 import { State as BuilderProgressState, Schema as RealBuilderProgress } from './progress-schema';
 
@@ -17,11 +17,7 @@ export type Target = json.JsonObject & RealTarget;
 export { BuilderProgressState };
 
 // Type short hands.
-export type BuilderRegistry = experimental.jobs.Registry<
-  json.JsonObject,
-  BuilderInput,
-  BuilderOutput
->;
+export type BuilderRegistry = Registry<json.JsonObject, BuilderInput, BuilderOutput>;
 
 /**
  * An API typed BuilderProgress. The interface generated from the schema is too permissive,
@@ -79,6 +75,12 @@ export interface BuilderRun {
    * interested in the result of that single run, not of a watch-mode builder.
    */
   result: Promise<BuilderOutput>;
+
+  /**
+   * The last output from a builder. This is recommended when scheduling a builder and only being
+   * interested in the result of that last run.
+   */
+  lastOutput: Promise<BuilderOutput>;
 
   /**
    * The output(s) from the builder. A builder can have multiple outputs.
@@ -243,12 +245,6 @@ export interface BuilderContext {
   reportProgress(current: number, total?: number, status?: string): void;
 
   /**
-   * API to report analytics. This might be undefined if the feature is unsupported. This might
-   * not be undefined, but the backend could also not report anything.
-   */
-  readonly analytics: analytics.Analytics;
-
-  /**
    * Add teardown logic to this Context, so that when it's being stopped it will execute teardown.
    */
   addTeardown(teardown: () => Promise<void> | void): void;
@@ -257,10 +253,7 @@ export interface BuilderContext {
 /**
  * An accepted return value from a builder. Can be either an Observable, a Promise or a vector.
  */
-export type BuilderOutputLike =
-  | AsyncIterable<BuilderOutput>
-  | SubscribableOrPromise<BuilderOutput>
-  | BuilderOutput;
+export type BuilderOutputLike = ObservableInput<BuilderOutput> | BuilderOutput;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function isBuilderOutput(obj: any): obj is BuilderOutput {
@@ -354,7 +347,7 @@ export function targetFromTargetString(str: string): Target {
 
 /**
  * Schedule a target, and forget about its run. This will return an observable of outputs, that
- * as a a teardown will stop the target from running. This means that the Run object this returns
+ * as a teardown will stop the target from running. This means that the Run object this returns
  * should not be shared.
  *
  * The reason this is not part of the Context interface is to keep the Context as normal form as

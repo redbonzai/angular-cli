@@ -7,8 +7,8 @@
  */
 
 import { Architect } from '@angular-devkit/architect';
-import { normalize, virtualFs } from '@angular-devkit/core';
-import { debounceTime, take, tap } from 'rxjs/operators';
+import { join, normalize, virtualFs } from '@angular-devkit/core';
+import { debounceTime, take, tap } from 'rxjs';
 import { createArchitect, host } from '../../../testing/test-utils';
 
 describe('Browser Builder service worker', () => {
@@ -40,16 +40,36 @@ describe('Browser Builder service worker', () => {
     await host.initialize().toPromise();
     architect = (await createArchitect(host.root())).architect;
   });
+
   afterEach(async () => host.restore().toPromise());
 
   it('errors if no ngsw-config.json is present', async () => {
     const overrides = { serviceWorker: true };
+    await host.delete(join(host.root(), 'src/ngsw-config.json')).toPromise();
 
     const run = await architect.scheduleTarget(target, overrides);
 
     await expectAsync(run.result).toBeResolvedTo(jasmine.objectContaining({ success: false }));
 
     await run.stop();
+  });
+
+  it('supports specifying a custom service worker configuration file', async () => {
+    host.writeMultipleFiles({
+      'src/configs/ngsw.json': JSON.stringify(manifest),
+      'src/assets/folder-asset.txt': 'folder-asset.txt',
+      'src/styles.css': `body { background: url(./spectrum.png); }`,
+    });
+
+    const overrides = { serviceWorker: true, ngswConfigPath: 'src/configs/ngsw.json' };
+
+    const run = await architect.scheduleTarget(target, overrides);
+
+    await expectAsync(run.result).toBeResolvedTo(jasmine.objectContaining({ success: true }));
+
+    await run.stop();
+
+    expect(host.scopedSync().exists(normalize('dist/ngsw.json'))).toBeTrue();
   });
 
   it('works with service worker', async () => {

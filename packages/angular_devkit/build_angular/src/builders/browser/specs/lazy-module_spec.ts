@@ -9,7 +9,7 @@
 import { Architect } from '@angular-devkit/architect';
 import { TestProjectHost } from '@angular-devkit/architect/testing';
 import { logging } from '@angular-devkit/core';
-import { debounceTime, take, tap } from 'rxjs/operators';
+import { debounceTime, take, tap } from 'rxjs';
 import {
   browserBuild,
   createArchitect,
@@ -65,8 +65,7 @@ describe('Browser Builder lazy modules', () => {
 
       const { files } = await browserBuild(architect, host, target, { aot: true });
       const data = await files['src_app_lazy_lazy_module_ts.js'];
-      expect(data).not.toBeUndefined('Lazy module output bundle does not exist');
-      expect(data).toContain('LazyModule.ɵmod');
+      expect(data).toContain('this.ɵmod');
     });
   });
 
@@ -85,7 +84,8 @@ describe('Browser Builder lazy modules', () => {
       const run = await architect.scheduleTarget(target, {}, { logger });
       const output = await run.result;
       expect(output.success).toBe(false);
-      expect(hasMissingModuleError(logs.join())).toBe(true, 'Should show missing module error');
+      expect(hasMissingModuleError(logs.join())).toBeTrue();
+      await run.stop();
     });
 
     it('should show error when lazy route is invalid on watch mode AOT', async () => {
@@ -98,7 +98,7 @@ describe('Browser Builder lazy modules', () => {
       const run = await architect.scheduleTarget(target, overrides);
       await run.output
         .pipe(
-          debounceTime(3000),
+          debounceTime(1500),
           tap((buildEvent) => {
             buildNumber++;
             switch (buildNumber) {
@@ -125,7 +125,7 @@ describe('Browser Builder lazy modules', () => {
     });
 
     const { files } = await browserBuild(architect, host, target);
-    expect(files['src_lazy-module_ts.js']).not.toBeUndefined();
+    expect(files['src_lazy-module_ts.js']).toBeDefined();
   });
 
   it(`supports lazy bundle for dynamic import() calls`, async () => {
@@ -139,7 +139,7 @@ describe('Browser Builder lazy modules', () => {
     host.replaceInFile('src/tsconfig.app.json', '"main.ts"', `"main.ts","lazy-module.ts"`);
 
     const { files } = await browserBuild(architect, host, target);
-    expect(files['lazy-module.js']).not.toBeUndefined();
+    expect(files['lazy-module.js']).toBeDefined();
   });
 
   it(`supports making a common bundle for shared lazy modules`, async () => {
@@ -150,9 +150,9 @@ describe('Browser Builder lazy modules', () => {
     });
 
     const { files } = await browserBuild(architect, host, target);
-    expect(files['src_one_ts.js']).not.toBeUndefined();
-    expect(files['src_two_ts.js']).not.toBeUndefined();
-    expect(files['default-node_modules_angular_common_fesm2020_http_mjs.js']).toBeDefined();
+    expect(files['src_one_ts.js']).toBeDefined();
+    expect(files['src_two_ts.js']).toBeDefined();
+    expect(files['default-node_modules_angular_common_fesm2022_http_mjs.js']).toBeDefined();
   });
 
   it(`supports disabling the common bundle`, async () => {
@@ -163,8 +163,8 @@ describe('Browser Builder lazy modules', () => {
     });
 
     const { files } = await browserBuild(architect, host, target, { commonChunk: false });
-    expect(files['src_one_ts.js']).not.toBeUndefined();
-    expect(files['src_two_ts.js']).not.toBeUndefined();
-    expect(files['default-node_modules_angular_common_fesm2020_http_mjs.js']).toBeUndefined();
+    expect(files['src_one_ts.js']).toBeDefined();
+    expect(files['src_two_ts.js']).toBeDefined();
+    expect(files['default-node_modules_angular_common_fesm2022_http_mjs.js']).toBeUndefined();
   });
 });

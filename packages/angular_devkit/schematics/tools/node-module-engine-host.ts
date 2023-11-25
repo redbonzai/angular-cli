@@ -34,6 +34,7 @@ export class NodeModulesEngineHost extends FileSystemEngineHostBase {
   }
 
   private resolve(name: string, requester?: string, references = new Set<string>()): string {
+    // Keep track of the package requesting the schematic, in order to avoid infinite recursion
     if (requester) {
       if (references.has(requester)) {
         references.add(requester);
@@ -65,9 +66,18 @@ export class NodeModulesEngineHost extends FileSystemEngineHostBase {
         throw new NodePackageDoesNotSupportSchematics(name);
       }
 
-      collectionPath = this.resolve(schematics, packageJsonPath, references);
+      // If this is a relative path to the collection, then create the collection
+      // path in relation to the package path
+      if (schematics.startsWith('.')) {
+        const packageDirectory = dirname(packageJsonPath);
+        collectionPath = resolve(packageDirectory, schematics);
+      }
+      // Otherwise treat this as a package, and recurse to find the collection path
+      else {
+        collectionPath = this.resolve(schematics, packageJsonPath, references);
+      }
     } catch (e) {
-      if (e.code !== 'MODULE_NOT_FOUND') {
+      if ((e as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') {
         throw e;
       }
     }
@@ -77,7 +87,7 @@ export class NodeModulesEngineHost extends FileSystemEngineHostBase {
       try {
         collectionPath = require.resolve(name, resolveOptions);
       } catch (e) {
-        if (e.code !== 'MODULE_NOT_FOUND') {
+        if ((e as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') {
           throw e;
         }
       }
@@ -98,7 +108,11 @@ export class NodeModulesEngineHost extends FileSystemEngineHostBase {
     return collectionPath;
   }
 
-  protected _resolveReferenceString(refString: string, parentPath: string) {
+  protected _resolveReferenceString(
+    refString: string,
+    parentPath: string,
+    collectionDescription?: FileSystemCollectionDesc,
+  ) {
     const ref = new ExportStringRef<RuleFactory<{}>>(refString, parentPath);
     if (!ref.ref) {
       return null;

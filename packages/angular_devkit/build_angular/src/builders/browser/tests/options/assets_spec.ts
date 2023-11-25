@@ -107,7 +107,7 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
         harness.expectFile('dist/test.svg').toNotExist();
       });
 
-      it('throws exception if asset path is not within project source root', async () => {
+      it('fail if asset path is not within project source root', async () => {
         await harness.writeFile('test.svg', '<svg></svg>');
 
         harness.useTarget('build', {
@@ -115,14 +115,9 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
           assets: ['test.svg'],
         });
 
-        const { result, error } = await harness.executeOnce({ outputLogsOnException: false });
+        const { result } = await harness.executeOnce();
 
-        expect(result).toBeUndefined();
-        expect(error).toEqual(
-          jasmine.objectContaining({
-            message: jasmine.stringMatching('path must start with the project source root'),
-          }),
-        );
+        expect(result?.error).toMatch('path must start with the project source root');
 
         harness.expectFile('dist/test.svg').toNotExist();
       });
@@ -364,7 +359,7 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
         harness.expectFile('dist/subdirectory/test.svg').content.toBe('<svg></svg>');
       });
 
-      it('throws exception if output option is not within project output path', async () => {
+      it('fails if output option is not within project output path', async () => {
         await harness.writeFile('test.svg', '<svg></svg>');
 
         harness.useTarget('build', {
@@ -372,15 +367,10 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
           assets: [{ glob: 'test.svg', input: 'src', output: '..' }],
         });
 
-        const { result, error } = await harness.executeOnce({ outputLogsOnException: false });
+        const { result } = await harness.executeOnce();
 
-        expect(result).toBeUndefined();
-        expect(error).toEqual(
-          jasmine.objectContaining({
-            message: jasmine.stringMatching(
-              'An asset cannot be written to a location outside of the output path',
-            ),
-          }),
+        expect(result?.error).toMatch(
+          'An asset cannot be written to a location outside of the output path',
         );
 
         harness.expectFile('dist/test.svg').toNotExist();

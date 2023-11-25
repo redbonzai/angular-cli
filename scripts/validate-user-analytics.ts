@@ -6,123 +6,114 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { analytics, logging, tags } from '@angular-devkit/core';
-import { spawnSync } from 'child_process';
+import { logging } from '@angular-devkit/core';
+import assert from 'assert';
+import glob from 'fast-glob';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
-import { CommandDescriptionMap, Option } from '../packages/angular/cli/models/interface';
-import create from './create';
+import { packages } from '../lib/packages';
+import {
+  EventCustomDimension,
+  EventCustomMetric,
+  UserCustomDimension,
+} from '../packages/angular/cli/src/analytics/analytics-parameters';
 
 const userAnalyticsTable = require('./templates/user-analytics-table').default;
 
 const dimensionsTableRe = /<!--DIMENSIONS_TABLE_BEGIN-->([\s\S]*)<!--DIMENSIONS_TABLE_END-->/m;
+const userDimensionsTableRe =
+  /<!--USER_DIMENSIONS_TABLE_BEGIN-->([\s\S]*)<!--USER_DIMENSIONS_TABLE_END-->/m;
 const metricsTableRe = /<!--METRICS_TABLE_BEGIN-->([\s\S]*)<!--METRICS_TABLE_END-->/m;
 
-/**
- * Execute a command.
- * @private
- */
-function _exec(command: string, args: string[], opts: { cwd?: string }, logger: logging.Logger) {
-  const { status, error, stdout } = spawnSync(command, args, {
-    stdio: ['ignore', 'pipe', 'inherit'],
-    ...opts,
-  });
+async function _checkUserDimensions(dimensionsTable: string, logger: logging.Logger) {
+  logger.info('Gathering user dimensions from @angular/cli...');
+  const data = Object.entries(UserCustomDimension).map(([key, value]) => ({
+    parameter: value,
+    name: key,
+    type: value.charAt(2) === 'n' ? 'number' : 'string',
+  }));
 
-  if (status != 0) {
-    logger.error(`Command failed: ${command} ${args.map((x) => JSON.stringify(x)).join(', ')}`);
-    throw error;
+  if (data.length > 25) {
+    throw new Error(
+      'GA has a limit of 25 custom user dimensions. Delete and archive the ones that are not needed.',
+    );
   }
 
-  return stdout.toString('utf-8');
+  for (const { parameter } of data) {
+    const param = parameter.split('.')[1];
+    if (param.length > 24) {
+      throw new Error(`User dimension parameter ${param} is more than 24 characters.`);
+    }
+  }
+
+  const generatedTable = userAnalyticsTable({ data }).trim();
+  if (dimensionsTable !== generatedTable) {
+    logger.error(
+      'Expected user dimensions table to be the same as generated. Copy the lines below:',
+    );
+    logger.error(generatedTable);
+
+    return 3;
+  }
+
+  return 0;
 }
 
 async function _checkDimensions(dimensionsTable: string, logger: logging.Logger) {
-  const data: { userAnalytics: number; type: string; name: string }[] = new Array(200);
+  logger.info('Gathering event dimensions from @angular/cli...');
+  const eventCustomDimensionValues = new Set(Object.values(EventCustomDimension));
 
-  function _updateData(userAnalytics: number, name: string, type: string) {
-    if (data[userAnalytics]) {
-      if (data[userAnalytics].name !== name) {
-        logger.error(tags.stripIndents`
-            User analytics clash with the same name: ${data[userAnalytics].name} and
-            ${name} both have userAnalytics of ${userAnalytics}
-          `);
-
-        return 2;
-      }
-    } else {
-      data[userAnalytics] = { userAnalytics, name, type };
-    }
-  }
-
-  logger.info('Gathering fixed dimension from @angular-devkit/core...');
-
-  // Create the data with dimensions missing from schema.json:
-  const allFixedDimensions = Object.keys(analytics.NgCliAnalyticsDimensions)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .filter((x) => typeof analytics.NgCliAnalyticsDimensions[x as any] === 'number');
-
-  for (const name of allFixedDimensions) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const userAnalytics = analytics.NgCliAnalyticsDimensions[name as any];
-    if (!(name in analytics.NgCliAnalyticsDimensionsFlagInfo)) {
-      throw new Error(
-        `Flag ${name} is in NgCliAnalyticsDimensions but not NgCliAnalyticsDimensionsFlagInfo`,
-      );
-    }
-
-    const [flagName, type] = analytics.NgCliAnalyticsDimensionsFlagInfo[name];
-    if (typeof userAnalytics !== 'number') {
-      throw new Error(
-        `Invalid value found in enum AnalyticsDimensions: ${JSON.stringify(userAnalytics)}`,
-      );
-    }
-    _updateData(userAnalytics, flagName, type);
-  }
-
-  // Creating a new project and reading the help.
-  logger.info('Creating temporary project for gathering help...');
-
-  const newProjectTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'angular-cli-create-'));
-  const newProjectName = 'help-project';
-  const newProjectRoot = path.join(newProjectTempRoot, newProjectName);
-  await create({ _: [newProjectName] }, logger.createChild('create'), newProjectTempRoot);
-
-  const commandDescription: CommandDescriptionMap = {};
-
-  logger.info('Gathering options...');
-
-  const commands = require('../packages/angular/cli/commands.json');
-  const ngPath = path.join(newProjectRoot, 'node_modules/.bin/ng');
-  for (const commandName of Object.keys(commands)) {
-    const options = { cwd: newProjectRoot };
-    const childLogger = logger.createChild(commandName);
-    const stdout = _exec(ngPath, [commandName, '--help=json'], options, childLogger);
-    commandDescription[commandName] = JSON.parse(stdout.trim());
-  }
-
-  function _checkOptionsForAnalytics(options: Option[]) {
-    for (const option of options) {
-      if (option.subcommands) {
-        for (const subcommand of Object.values(option.subcommands)) {
-          _checkOptionsForAnalytics(subcommand.options);
+  logger.info('Gathering options for user-analytics...');
+  const schemaUserAnalyticsValidator = (obj: Object) => {
+    for (const value of Object.values(obj)) {
+      if (value && typeof value === 'object') {
+        const userAnalytics = value['x-user-analytics'];
+        if (userAnalytics && !eventCustomDimensionValues.has(userAnalytics)) {
+          throw new Error(
+            `Invalid value found in enum AnalyticsDimensions: ${JSON.stringify(userAnalytics)}`,
+          );
+        } else {
+          schemaUserAnalyticsValidator(value);
         }
       }
+    }
+  };
 
-      if (option.userAnalytics === undefined) {
-        continue;
-      }
-      _updateData(option.userAnalytics, 'Flag: --' + option.name, option.type);
+  // Find all the schemas
+  const packagesPaths = Object.values(packages).map(({ root }) => root);
+  for (const packagePath of packagesPaths) {
+    const schemasPaths = await glob('**/schema.json', { cwd: packagePath });
+
+    for (const schemaPath of schemasPaths) {
+      const schema = await fs.promises.readFile(path.join(packagePath, schemaPath), 'utf8');
+      schemaUserAnalyticsValidator(JSON.parse(schema));
     }
   }
 
-  for (const commandName of Object.keys(commandDescription)) {
-    _checkOptionsForAnalytics(commandDescription[commandName].options);
+  const data = Object.entries(EventCustomDimension).map(([key, value]) => ({
+    parameter: value,
+    name: key,
+    type: value.charAt(2) === 'n' ? 'number' : 'string',
+  }));
+
+  if (data.length > 50) {
+    throw new Error(
+      'GA has a limit of 50 custom event dimensions. Delete and archive the ones that are not needed.',
+    );
   }
 
-  const generatedTable = userAnalyticsTable({ flags: data }).trim();
+  for (const { parameter } of data) {
+    const param = parameter.split('.')[1];
+    if (param.length > 40) {
+      throw new Error(`Event dimension parameter ${param} is more than 40 characters.`);
+    }
+  }
+
+  const generatedTable = userAnalyticsTable({ data }).trim();
   if (dimensionsTable !== generatedTable) {
-    logger.error('Expected dimensions table to be the same as generated. Copy the lines below:');
+    logger.error(
+      'Expected event dimensions table to be the same as generated. Copy the lines below:',
+    );
     logger.error(generatedTable);
 
     return 3;
@@ -132,49 +123,27 @@ async function _checkDimensions(dimensionsTable: string, logger: logging.Logger)
 }
 
 async function _checkMetrics(metricsTable: string, logger: logging.Logger) {
-  const data: { userAnalytics: number; type: string; name: string }[] = new Array(200);
+  logger.info('Gathering metrics from @angular/cli...');
+  const data = Object.entries(EventCustomMetric).map(([key, value]) => ({
+    parameter: value,
+    name: key,
+    type: value.charAt(2) === 'n' ? 'number' : 'string',
+  }));
 
-  function _updateData(userAnalytics: number, name: string, type: string) {
-    if (data[userAnalytics]) {
-      if (data[userAnalytics].name !== name) {
-        logger.error(tags.stripIndents`
-            User analytics clash with the same name: ${data[userAnalytics].name} and
-            ${name} both have userAnalytics of ${userAnalytics}
-          `);
+  if (data.length > 50) {
+    throw new Error(
+      'GA has a limit of 50 custom metrics. Delete and archive the ones that are not needed.',
+    );
+  }
 
-        return 2;
-      }
-    } else {
-      data[userAnalytics] = { userAnalytics, name, type };
+  for (const { parameter } of data) {
+    const param = parameter.split('.')[1];
+    if (param.length > 40) {
+      throw new Error(`Event metric parameter ${param} is more than 40 characters.`);
     }
   }
 
-  logger.info('Gathering fixed metrics from @angular-devkit/core...');
-
-  // Create the data with dimensions missing from schema.json:
-  const allFixedMetrics = Object.keys(analytics.NgCliAnalyticsMetrics)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .filter((x) => typeof analytics.NgCliAnalyticsMetrics[x as any] === 'number');
-
-  for (const name of allFixedMetrics) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const userAnalytics = analytics.NgCliAnalyticsMetrics[name as any];
-    if (!(name in analytics.NgCliAnalyticsMetricsFlagInfo)) {
-      throw new Error(
-        `Flag ${name} is in NgCliAnalyticsMetrics but not NgCliAnalyticsMetricsFlagInfo`,
-      );
-    }
-
-    const [flagName, type] = analytics.NgCliAnalyticsMetricsFlagInfo[name];
-    if (typeof userAnalytics !== 'number') {
-      throw new Error(
-        `Invalid value found in enum NgCliAnalyticsMetrics: ${JSON.stringify(userAnalytics)}`,
-      );
-    }
-    _updateData(userAnalytics, flagName, type);
-  }
-
-  const generatedTable = userAnalyticsTable({ flags: data }).trim();
+  const generatedTable = userAnalyticsTable({ data }).trim();
   if (metricsTable !== generatedTable) {
     logger.error('Expected metrics table to be the same as generated. Copy the lines below:');
     logger.error(generatedTable);
@@ -193,16 +162,21 @@ export default async function (_options: {}, logger: logging.Logger): Promise<nu
   const analyticsMarkdownPath = path.join(__dirname, '../docs/design/analytics.md');
   const analyticsMarkdown = fs.readFileSync(analyticsMarkdownPath, 'utf8');
   const dimensionsMatch = analyticsMarkdown.match(dimensionsTableRe);
+  const userDimensionsMatch = analyticsMarkdown.match(userDimensionsTableRe);
   const metricsMatch = analyticsMarkdown.match(metricsTableRe);
 
-  if (!dimensionsMatch || !metricsMatch) {
-    logger.fatal('Could not find dimensions or metrics table in analytics.md');
+  assert.ok(dimensionsMatch, 'Event dimensions table not found in analytics.md');
+  assert.ok(userDimensionsMatch, 'User dimensions table not found in analytics.md');
+  assert.ok(metricsMatch, 'Metrics table not found in analytics.md');
 
-    return 1;
+  const userDimensionsTable = userDimensionsMatch[1].trim();
+  let maybeError = await _checkUserDimensions(userDimensionsTable, logger);
+  if (maybeError) {
+    return maybeError;
   }
 
   const metricsTable = metricsMatch[1].trim();
-  let maybeError = await _checkMetrics(metricsTable, logger);
+  maybeError = await _checkMetrics(metricsTable, logger);
   if (maybeError) {
     return maybeError;
   }

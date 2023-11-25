@@ -4,7 +4,6 @@
   "newProjectRoot": "./projects",
   "cli": {},
   "schematics": {},
-  "targets": {},
   "projects": {
     "app": {
       "root": "src",
@@ -15,13 +14,13 @@
         "build": {
           "builder": "../../:webpack",
           "options": {
-            "webpackConfig": "webpack.config.js"
+            "webpackConfig": "webpack.config.cjs"
           }
         },
         "serve": {
           "builder": "../../:webpack-dev-server",
           "options": {
-            "webpackConfig": "webpack.config.js"
+            "webpackConfig": "webpack.config.cjs"
           }
         }
       }

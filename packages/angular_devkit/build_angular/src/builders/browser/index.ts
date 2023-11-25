@@ -8,13 +8,23 @@
 
 import { BuilderContext, BuilderOutput, createBuilder } from '@angular-devkit/architect';
 import { EmittedFiles, WebpackLoggingCallback, runWebpack } from '@angular-devkit/build-webpack';
-import { getSystemPath, json, logging, normalize, resolve } from '@angular-devkit/core';
+import { imageDomains } from '@ngtools/webpack';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Observable, from } from 'rxjs';
-import { concatMap, map, switchMap } from 'rxjs/operators';
-import { ScriptTarget } from 'typescript';
-import webpack from 'webpack';
+import { Observable, concatMap, from, map, switchMap } from 'rxjs';
+import webpack, { StatsCompilation } from 'webpack';
+import { getCommonConfig, getStylesConfig } from '../../tools/webpack/configs';
+import { markAsyncChunksNonInitial } from '../../tools/webpack/utils/async-chunks';
+import { normalizeExtraEntryPoints } from '../../tools/webpack/utils/helpers';
+import {
+  BuildEventStats,
+  generateBuildEventStats,
+  statsErrorsToString,
+  statsHasErrors,
+  statsHasWarnings,
+  statsWarningsToString,
+  webpackStatsLogger,
+} from '../../tools/webpack/utils/stats';
 import { ExecutionTransformer } from '../../transforms';
 import {
   deleteOutputDir,
@@ -22,9 +32,14 @@ import {
   normalizeOptimization,
   urlJoin,
 } from '../../utils';
-import { ThresholdSeverity, checkBudgets } from '../../utils/bundle-calculator';
+import {
+  BudgetCalculatorResult,
+  ThresholdSeverity,
+  checkBudgets,
+} from '../../utils/bundle-calculator';
 import { colors } from '../../utils/color';
 import { copyAssets } from '../../utils/copy-assets';
+import { assertIsError } from '../../utils/error';
 import { i18nInlineEmittedFiles } from '../../utils/i18n-inlining';
 import { I18nOptions } from '../../utils/i18n-options';
 import { FileInfo } from '../../utils/index-file/augment-index-html';
@@ -35,39 +50,35 @@ import {
 import { normalizeCacheOptions } from '../../utils/normalize-cache';
 import { ensureOutputPaths } from '../../utils/output-paths';
 import { generateEntryPoints } from '../../utils/package-chunk-sort';
+import { purgeStaleBuildCache } from '../../utils/purge-cache';
 import { augmentAppWithServiceWorker } from '../../utils/service-worker';
 import { Spinner } from '../../utils/spinner';
-import { getSupportedBrowsers } from '../../utils/supported-browsers';
 import { assertCompatibleAngularVersion } from '../../utils/version';
 import {
   generateI18nBrowserWebpackConfigFromContext,
   getIndexInputFile,
   getIndexOutputFile,
 } from '../../utils/webpack-browser-config';
-import { getAnalyticsConfig, getCommonConfig, getStylesConfig } from '../../webpack/configs';
-import { markAsyncChunksNonInitial } from '../../webpack/utils/async-chunks';
-import { normalizeExtraEntryPoints } from '../../webpack/utils/helpers';
-import {
-  statsErrorsToString,
-  statsHasErrors,
-  statsHasWarnings,
-  statsWarningsToString,
-  webpackStatsLogger,
-} from '../../webpack/utils/stats';
 import { Schema as BrowserBuilderSchema } from './schema';
 
 /**
  * @experimental Direct usage of this type is considered experimental.
  */
-export type BrowserBuilderOutput = json.JsonObject &
-  BuilderOutput & {
-    baseOutputPath: string;
-    outputPaths: string[];
-    /**
-     * @deprecated in version 9. Use 'outputPaths' instead.
-     */
-    outputPath: string;
-  };
+export type BrowserBuilderOutput = BuilderOutput & {
+  stats: BuildEventStats;
+  baseOutputPath: string;
+  outputs: {
+    locale?: string;
+    path: string;
+    baseHref?: string;
+  }[];
+};
+
+/**
+ * Maximum time in milliseconds for single build/rebuild
+ * This accounts for CI variability.
+ */
+export const BUILD_TIMEOUT = 30_000;
 
 async function initialize(
   options: BrowserBuilderSchema,
@@ -78,33 +89,17 @@ async function initialize(
   projectRoot: string;
   projectSourceRoot?: string;
   i18n: I18nOptions;
-  target: ScriptTarget;
 }> {
   const originalOutputPath = options.outputPath;
 
   // Assets are processed directly by the builder except when watching
   const adjustedOptions = options.watch ? options : { ...options, assets: [] };
 
-  const { config, projectRoot, projectSourceRoot, i18n, target } =
+  const { config, projectRoot, projectSourceRoot, i18n } =
     await generateI18nBrowserWebpackConfigFromContext(adjustedOptions, context, (wco) => [
       getCommonConfig(wco),
       getStylesConfig(wco),
-      getAnalyticsConfig(wco, context),
     ]);
-
-  // Validate asset option values if processed directly
-  if (options.assets?.length && !adjustedOptions.assets?.length) {
-    normalizeAssetPatterns(
-      options.assets,
-      normalize(context.workspaceRoot),
-      normalize(projectRoot),
-      projectSourceRoot === undefined ? undefined : normalize(projectSourceRoot),
-    ).forEach(({ output }) => {
-      if (output.startsWith('..')) {
-        throw new Error('An asset cannot be written to a location outside of the output path.');
-      }
-    });
-  }
 
   let transformedConfig;
   if (webpackConfigurationTransform) {
@@ -112,10 +107,10 @@ async function initialize(
   }
 
   if (options.deleteOutputPath) {
-    deleteOutputDir(context.workspaceRoot, originalOutputPath);
+    await deleteOutputDir(context.workspaceRoot, originalOutputPath);
   }
 
-  return { config: transformedConfig || config, projectRoot, projectSourceRoot, i18n, target };
+  return { config: transformedConfig || config, projectRoot, projectSourceRoot, i18n };
 }
 
 /**
@@ -131,8 +126,6 @@ export function buildWebpackBrowser(
     indexHtml?: IndexHtmlTransform;
   } = {},
 ): Observable<BrowserBuilderOutput> {
-  const root = normalize(context.workspaceRoot);
-
   const projectName = context.target?.project;
   if (!projectName) {
     throw new Error('The builder requires a target.');
@@ -146,23 +139,33 @@ export function buildWebpackBrowser(
 
   return from(context.getProjectMetadata(projectName)).pipe(
     switchMap(async (projectMetadata) => {
-      const sysProjectRoot = getSystemPath(
-        resolve(
-          normalize(context.workspaceRoot),
-          normalize((projectMetadata.root as string) ?? ''),
-        ),
-      );
+      // Purge old build disk cache.
+      await purgeStaleBuildCache(context);
 
-      checkInternetExplorerSupport(sysProjectRoot, context.logger);
+      // Initialize builder
+      const initialization = await initialize(options, context, transforms.webpackConfiguration);
+
+      // Add index file to watched files.
+      if (options.watch) {
+        const indexInputFile = path.join(context.workspaceRoot, getIndexInputFile(options.index));
+        initialization.config.plugins ??= [];
+        initialization.config.plugins.push({
+          apply: (compiler: webpack.Compiler) => {
+            compiler.hooks.thisCompilation.tap('build-angular', (compilation) => {
+              compilation.fileDependencies.add(indexInputFile);
+            });
+          },
+        });
+      }
 
       return {
-        ...(await initialize(options, context, transforms.webpackConfiguration)),
+        ...initialization,
         cacheOptions: normalizeCacheOptions(projectMetadata, context.workspaceRoot),
       };
     }),
     switchMap(
       // eslint-disable-next-line max-lines-per-function
-      ({ config, projectRoot, projectSourceRoot, i18n, target, cacheOptions }) => {
+      ({ config, projectRoot, projectSourceRoot, i18n, cacheOptions }) => {
         const normalizedOptimization = normalizeOptimization(options.optimization);
 
         return runWebpack(config, context, {
@@ -175,198 +178,243 @@ export function buildWebpackBrowser(
               }
             }),
         }).pipe(
-          concatMap(async (buildEvent) => {
-            const spinner = new Spinner();
-            spinner.enabled = options.progress !== false;
+          concatMap(
+            // eslint-disable-next-line max-lines-per-function
+            async (
+              buildEvent,
+            ): Promise<{ output: BuilderOutput; webpackStats: StatsCompilation }> => {
+              const spinner = new Spinner();
+              spinner.enabled = options.progress !== false;
 
-            const { success, emittedFiles = [], outputPath: webpackOutputPath } = buildEvent;
-            const webpackRawStats = buildEvent.webpackStats;
-            if (!webpackRawStats) {
-              throw new Error('Webpack stats build result is required.');
-            }
-
-            // Fix incorrectly set `initial` value on chunks.
-            const extraEntryPoints = [
-              ...normalizeExtraEntryPoints(options.styles || [], 'styles'),
-              ...normalizeExtraEntryPoints(options.scripts || [], 'scripts'),
-            ];
-
-            const webpackStats = {
-              ...webpackRawStats,
-              chunks: markAsyncChunksNonInitial(webpackRawStats, extraEntryPoints),
-            };
-
-            if (!success) {
-              // If using bundle downleveling then there is only one build
-              // If it fails show any diagnostic messages and bail
-              if (statsHasWarnings(webpackStats)) {
-                context.logger.warn(statsWarningsToString(webpackStats, { colors: true }));
-              }
-              if (statsHasErrors(webpackStats)) {
-                context.logger.error(statsErrorsToString(webpackStats, { colors: true }));
+              const { success, emittedFiles = [], outputPath: webpackOutputPath } = buildEvent;
+              const webpackRawStats = buildEvent.webpackStats;
+              if (!webpackRawStats) {
+                throw new Error('Webpack stats build result is required.');
               }
 
-              return { success };
-            } else {
-              outputPaths = ensureOutputPaths(baseOutputPath, i18n);
+              // Fix incorrectly set `initial` value on chunks.
+              const extraEntryPoints = [
+                ...normalizeExtraEntryPoints(options.styles || [], 'styles'),
+                ...normalizeExtraEntryPoints(options.scripts || [], 'scripts'),
+              ];
 
-              const scriptsEntryPointName = normalizeExtraEntryPoints(
-                options.scripts || [],
-                'scripts',
-              ).map((x) => x.bundleName);
+              const webpackStats = {
+                ...webpackRawStats,
+                chunks: markAsyncChunksNonInitial(webpackRawStats, extraEntryPoints),
+              };
 
-              if (i18n.shouldInline) {
-                const success = await i18nInlineEmittedFiles(
-                  context,
-                  emittedFiles,
-                  i18n,
-                  baseOutputPath,
-                  Array.from(outputPaths.values()),
-                  scriptsEntryPointName,
-                  webpackOutputPath,
-                  target <= ScriptTarget.ES5,
-                  options.i18nMissingTranslation,
-                );
-                if (!success) {
-                  return { success: false };
+              if (!success) {
+                // If using bundle downleveling then there is only one build
+                // If it fails show any diagnostic messages and bail
+                if (statsHasWarnings(webpackStats)) {
+                  context.logger.warn(statsWarningsToString(webpackStats, { colors: true }));
                 }
-              }
-
-              // Check for budget errors and display them to the user.
-              const budgets = options.budgets;
-              if (budgets?.length) {
-                const budgetFailures = checkBudgets(budgets, webpackStats);
-                for (const { severity, message } of budgetFailures) {
-                  switch (severity) {
-                    case ThresholdSeverity.Warning:
-                      webpackStats.warnings?.push({ message });
-                      break;
-                    case ThresholdSeverity.Error:
-                      webpackStats.errors?.push({ message });
-                      break;
-                    default:
-                      assertNever(severity);
-                  }
+                if (statsHasErrors(webpackStats)) {
+                  context.logger.error(statsErrorsToString(webpackStats, { colors: true }));
                 }
-              }
 
-              const buildSuccess = success && !statsHasErrors(webpackStats);
-              if (buildSuccess) {
-                // Copy assets
-                if (!options.watch && options.assets?.length) {
-                  spinner.start('Copying assets...');
-                  try {
-                    await copyAssets(
-                      normalizeAssetPatterns(
-                        options.assets,
-                        root,
-                        normalize(projectRoot),
-                        projectSourceRoot === undefined ? undefined : normalize(projectSourceRoot),
-                      ),
-                      Array.from(outputPaths.values()),
-                      context.workspaceRoot,
-                    );
-                    spinner.succeed('Copying assets complete.');
-                  } catch (err) {
-                    spinner.fail(colors.redBright('Copying of assets failed.'));
+                return {
+                  webpackStats: webpackRawStats,
+                  output: { success: false },
+                };
+              } else {
+                outputPaths = ensureOutputPaths(baseOutputPath, i18n);
 
-                    return { success: false, error: 'Unable to copy assets: ' + err.message };
+                const scriptsEntryPointName = normalizeExtraEntryPoints(
+                  options.scripts || [],
+                  'scripts',
+                ).map((x) => x.bundleName);
+
+                if (i18n.shouldInline) {
+                  const success = await i18nInlineEmittedFiles(
+                    context,
+                    emittedFiles,
+                    i18n,
+                    baseOutputPath,
+                    Array.from(outputPaths.values()),
+                    scriptsEntryPointName,
+                    webpackOutputPath,
+                    options.i18nMissingTranslation,
+                  );
+                  if (!success) {
+                    return {
+                      webpackStats: webpackRawStats,
+                      output: { success: false },
+                    };
                   }
                 }
 
-                if (options.index) {
-                  spinner.start('Generating index html...');
+                // Check for budget errors and display them to the user.
+                const budgets = options.budgets;
+                let budgetFailures: BudgetCalculatorResult[] | undefined;
+                if (budgets?.length) {
+                  budgetFailures = [...checkBudgets(budgets, webpackStats)];
+                  for (const { severity, message } of budgetFailures) {
+                    switch (severity) {
+                      case ThresholdSeverity.Warning:
+                        webpackStats.warnings?.push({ message });
+                        break;
+                      case ThresholdSeverity.Error:
+                        webpackStats.errors?.push({ message });
+                        break;
+                      default:
+                        assertNever(severity);
+                    }
+                  }
+                }
 
-                  const entrypoints = generateEntryPoints({
-                    scripts: options.scripts ?? [],
-                    styles: options.styles ?? [],
-                  });
-
-                  const indexHtmlGenerator = new IndexHtmlGenerator({
-                    cache: cacheOptions,
-                    indexPath: path.join(context.workspaceRoot, getIndexInputFile(options.index)),
-                    entrypoints,
-                    deployUrl: options.deployUrl,
-                    sri: options.subresourceIntegrity,
-                    optimization: normalizedOptimization,
-                    crossOrigin: options.crossOrigin,
-                    postTransform: transforms.indexHtml,
-                  });
-
-                  let hasErrors = false;
-                  for (const [locale, outputPath] of outputPaths.entries()) {
+                const buildSuccess = success && !statsHasErrors(webpackStats);
+                if (buildSuccess) {
+                  // Copy assets
+                  if (!options.watch && options.assets?.length) {
+                    spinner.start('Copying assets...');
                     try {
-                      const { content, warnings, errors } = await indexHtmlGenerator.process({
-                        baseHref: getLocaleBaseHref(i18n, locale) || options.baseHref,
-                        // i18nLocale is used when Ivy is disabled
-                        lang: locale || undefined,
-                        outputPath,
-                        files: mapEmittedFilesToFileInfo(emittedFiles),
-                      });
+                      await copyAssets(
+                        normalizeAssetPatterns(
+                          options.assets,
+                          context.workspaceRoot,
+                          projectRoot,
+                          projectSourceRoot,
+                        ),
+                        Array.from(outputPaths.values()),
+                        context.workspaceRoot,
+                      );
+                      spinner.succeed('Copying assets complete.');
+                    } catch (err) {
+                      spinner.fail(colors.redBright('Copying of assets failed.'));
+                      assertIsError(err);
 
-                      if (warnings.length || errors.length) {
-                        spinner.stop();
-                        warnings.forEach((m) => context.logger.warn(m));
-                        errors.forEach((m) => {
-                          context.logger.error(m);
-                          hasErrors = true;
+                      return {
+                        output: {
+                          success: false,
+                          error: 'Unable to copy assets: ' + err.message,
+                        },
+                        webpackStats: webpackRawStats,
+                      };
+                    }
+                  }
+
+                  if (options.index) {
+                    spinner.start('Generating index html...');
+
+                    const entrypoints = generateEntryPoints({
+                      scripts: options.scripts ?? [],
+                      styles: options.styles ?? [],
+                    });
+
+                    const indexHtmlGenerator = new IndexHtmlGenerator({
+                      cache: cacheOptions,
+                      indexPath: path.join(context.workspaceRoot, getIndexInputFile(options.index)),
+                      entrypoints,
+                      deployUrl: options.deployUrl,
+                      sri: options.subresourceIntegrity,
+                      optimization: normalizedOptimization,
+                      crossOrigin: options.crossOrigin,
+                      postTransform: transforms.indexHtml,
+                      imageDomains: Array.from(imageDomains),
+                    });
+
+                    let hasErrors = false;
+                    for (const [locale, outputPath] of outputPaths.entries()) {
+                      try {
+                        const { content, warnings, errors } = await indexHtmlGenerator.process({
+                          baseHref: getLocaleBaseHref(i18n, locale) ?? options.baseHref,
+                          // i18nLocale is used when Ivy is disabled
+                          lang: locale || undefined,
+                          outputPath,
+                          files: mapEmittedFilesToFileInfo(emittedFiles),
                         });
-                        spinner.start();
-                      }
 
-                      const indexOutput = path.join(outputPath, getIndexOutputFile(options.index));
-                      await fs.promises.mkdir(path.dirname(indexOutput), { recursive: true });
-                      await fs.promises.writeFile(indexOutput, content);
-                    } catch (error) {
+                        if (warnings.length || errors.length) {
+                          spinner.stop();
+                          warnings.forEach((m) => context.logger.warn(m));
+                          errors.forEach((m) => {
+                            context.logger.error(m);
+                            hasErrors = true;
+                          });
+                          spinner.start();
+                        }
+
+                        const indexOutput = path.join(
+                          outputPath,
+                          getIndexOutputFile(options.index),
+                        );
+                        await fs.promises.mkdir(path.dirname(indexOutput), { recursive: true });
+                        await fs.promises.writeFile(indexOutput, content);
+                      } catch (error) {
+                        spinner.fail('Index html generation failed.');
+                        assertIsError(error);
+
+                        return {
+                          webpackStats: webpackRawStats,
+                          output: { success: false, error: error.message },
+                        };
+                      }
+                    }
+
+                    if (hasErrors) {
                       spinner.fail('Index html generation failed.');
 
-                      return { success: false, error: mapErrorToMessage(error) };
+                      return {
+                        webpackStats: webpackRawStats,
+                        output: { success: false },
+                      };
+                    } else {
+                      spinner.succeed('Index html generation complete.');
                     }
                   }
 
-                  if (hasErrors) {
-                    spinner.fail('Index html generation failed.');
+                  if (options.serviceWorker) {
+                    spinner.start('Generating service worker...');
+                    for (const [locale, outputPath] of outputPaths.entries()) {
+                      try {
+                        await augmentAppWithServiceWorker(
+                          projectRoot,
+                          context.workspaceRoot,
+                          outputPath,
+                          getLocaleBaseHref(i18n, locale) ?? options.baseHref ?? '/',
+                          options.ngswConfigPath,
+                        );
+                      } catch (error) {
+                        spinner.fail('Service worker generation failed.');
+                        assertIsError(error);
 
-                    return { success: false };
-                  } else {
-                    spinner.succeed('Index html generation complete.');
-                  }
-                }
-
-                if (options.serviceWorker) {
-                  spinner.start('Generating service worker...');
-                  for (const [locale, outputPath] of outputPaths.entries()) {
-                    try {
-                      await augmentAppWithServiceWorker(
-                        normalize(projectRoot),
-                        normalize(outputPath),
-                        getLocaleBaseHref(i18n, locale) || options.baseHref || '/',
-                        options.ngswConfigPath,
-                      );
-                    } catch (error) {
-                      spinner.fail('Service worker generation failed.');
-
-                      return { success: false, error: mapErrorToMessage(error) };
+                        return {
+                          webpackStats: webpackRawStats,
+                          output: { success: false, error: error.message },
+                        };
+                      }
                     }
-                  }
 
-                  spinner.succeed('Service worker generation complete.');
+                    spinner.succeed('Service worker generation complete.');
+                  }
                 }
+
+                webpackStatsLogger(context.logger, webpackStats, config, budgetFailures);
+
+                return {
+                  webpackStats: webpackRawStats,
+                  output: { success: buildSuccess },
+                };
               }
-
-              webpackStatsLogger(context.logger, webpackStats, config);
-
-              return { success: buildSuccess };
-            }
-          }),
+            },
+          ),
           map(
-            (event) =>
+            ({ output: event, webpackStats }) =>
               ({
                 ...event,
+                stats: generateBuildEventStats(webpackStats, options),
                 baseOutputPath,
-                outputPath: baseOutputPath,
-                outputPaths: (outputPaths && Array.from(outputPaths.values())) || [baseOutputPath],
-              } as BrowserBuilderOutput),
+                outputs: (outputPaths &&
+                  [...outputPaths.entries()].map(([locale, path]) => ({
+                    locale,
+                    path,
+                    baseHref: getLocaleBaseHref(i18n, locale) ?? options.baseHref,
+                  }))) || {
+                  path: baseOutputPath,
+                  baseHref: options.baseHref,
+                },
+              }) as BrowserBuilderOutput,
           ),
         );
       },
@@ -380,18 +428,6 @@ export function buildWebpackBrowser(
 
     return undefined;
   }
-}
-
-function mapErrorToMessage(error: unknown): string | undefined {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (typeof error === 'string') {
-    return error;
-  }
-
-  return undefined;
 }
 
 function assertNever(input: never): never {
@@ -415,15 +451,4 @@ function mapEmittedFilesToFileInfo(files: EmittedFiles[] = []): FileInfo[] {
   return filteredFiles;
 }
 
-function checkInternetExplorerSupport(projectRoot: string, logger: logging.LoggerApi): void {
-  const supportedBrowsers = getSupportedBrowsers(projectRoot);
-  if (supportedBrowsers.some((b) => b === 'ie 9' || b === 'ie 10' || b === 'ie 11')) {
-    logger.warn(
-      `Warning: Support was requested for Internet Explorer in the project's browserslist configuration. ` +
-        'Internet Explorer is no longer officially supported.' +
-        '\nFor more information, see https://angular.io/guide/browser-support',
-    );
-  }
-}
-
-export default createBuilder<json.JsonObject & BrowserBuilderSchema>(buildWebpackBrowser);
+export default createBuilder<BrowserBuilderSchema>(buildWebpackBrowser);

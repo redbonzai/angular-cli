@@ -22,17 +22,12 @@ import {
 export type InsertionIndex = (properties: string[]) => number;
 export type JSONPath = (string | number)[];
 
-/** @internal */
+/** @private */
 export class JSONFile {
   content: string;
 
   constructor(private readonly host: Tree, private readonly path: string) {
-    const buffer = this.host.read(this.path);
-    if (buffer) {
-      this.content = buffer.toString();
-    } else {
-      throw new Error(`Could not read '${path}'.`);
-    }
+    this.content = this.host.readText(this.path);
   }
 
   private _jsonAst: Node | undefined;

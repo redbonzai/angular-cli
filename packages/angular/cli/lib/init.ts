@@ -9,13 +9,23 @@
 import 'symbol-observable';
 // symbol polyfill must go first
 import { promises as fs } from 'fs';
+import { createRequire } from 'module';
 import * as path from 'path';
-import { SemVer } from 'semver';
-import { VERSION } from '../models/version';
-import { colors } from '../utilities/color';
-import { isWarningEnabled } from '../utilities/config';
+import { SemVer, major } from 'semver';
+import { colors } from '../src/utilities/color';
+import { isWarningEnabled } from '../src/utilities/config';
+import { disableVersionCheck } from '../src/utilities/environment-options';
+import { VERSION } from '../src/utilities/version';
 
-(async () => {
+/**
+ * Angular CLI versions prior to v14 may not exit correctly if not forcibly exited
+ * via `process.exit()`. When bootstrapping, `forceExit` will be set to `true`
+ * if the local CLI version is less than v14 to prevent the CLI from hanging on
+ * exit in those cases.
+ */
+let forceExit = false;
+
+(async (): Promise<typeof import('./cli').default | null> => {
   /**
    * Disable Browserslist old data warning as otherwise with every release we'd need to update this dependency
    * which is cumbersome considering we pin versions and the warning is not user actionable.
@@ -23,26 +33,27 @@ import { isWarningEnabled } from '../utilities/config';
    * See: https://github.com/browserslist/browserslist/blob/819c4337456996d19db6ba953014579329e9c6e1/node.js#L324
    */
   process.env.BROWSERSLIST_IGNORE_OLD_DATA = '1';
+  const rawCommandName = process.argv[2];
 
-  const disableVersionCheckEnv = process.env['NG_DISABLE_VERSION_CHECK'];
   /**
    * Disable CLI version mismatch checks and forces usage of the invoked CLI
    * instead of invoking the local installed version.
+   *
+   * When running `ng new` always favor the global version. As in some
+   * cases orphan `node_modules` would cause the non global CLI to be used.
+   * @see: https://github.com/angular/angular-cli/issues/14603
    */
-  const disableVersionCheck =
-    disableVersionCheckEnv !== undefined &&
-    disableVersionCheckEnv !== '0' &&
-    disableVersionCheckEnv.toLowerCase() !== 'false';
-
-  if (disableVersionCheck) {
+  if (disableVersionCheck || rawCommandName === 'new') {
     return (await import('./cli')).default;
   }
 
   let cli;
+
   try {
     // No error implies a projectLocalCli, which will load whatever
     // version of ng-cli you have installed in a local package.json
-    const projectLocalCli = require.resolve('@angular/cli', { paths: [process.cwd()] });
+    const cwdRequire = createRequire(process.cwd() + '/');
+    const projectLocalCli = cwdRequire.resolve('@angular/cli');
     cli = await import(projectLocalCli);
 
     const globalVersion = new SemVer(VERSION.full);
@@ -62,18 +73,38 @@ import { isWarningEnabled } from '../utilities/config';
       }
     }
 
+    // Ensure older versions of the CLI fully exit
+    const localMajorVersion = major(localVersion);
+    if (localMajorVersion > 0 && localMajorVersion < 14) {
+      forceExit = true;
+
+      // Versions prior to 14 didn't implement completion command.
+      if (rawCommandName === 'completion') {
+        return null;
+      }
+    }
+
     let isGlobalGreater = false;
     try {
-      isGlobalGreater = !!localVersion && globalVersion.compare(localVersion) > 0;
+      isGlobalGreater = localVersion > 0 && globalVersion.compare(localVersion) > 0;
     } catch (error) {
       // eslint-disable-next-line  no-console
       console.error('Version mismatch check skipped. Unable to compare local version: ' + error);
     }
 
-    if (isGlobalGreater) {
+    // When using the completion command, don't show the warning as otherwise this will break completion.
+    if (
+      isGlobalGreater &&
+      rawCommandName !== '--get-yargs-completions' &&
+      rawCommandName !== 'completion'
+    ) {
       // If using the update command and the global version is greater, use the newer update command
       // This allows improvements in update to be used in older versions that do not have bootstrapping
-      if (process.argv[2] === 'update') {
+      if (
+        rawCommandName === 'update' &&
+        cli.VERSION &&
+        cli.VERSION.major - globalVersion.major <= 1
+      ) {
         cli = await import('./cli');
       } else if (await isWarningEnabled('versionMismatch')) {
         // Otherwise, use local version and warn if global is newer than local
@@ -100,15 +131,16 @@ import { isWarningEnabled } from '../utilities/config';
 
   return cli;
 })()
-  .then((cli) => {
-    return cli({
+  .then((cli) =>
+    cli?.({
       cliArgs: process.argv.slice(2),
-      inputStream: process.stdin,
-      outputStream: process.stdout,
-    });
-  })
-  .then((exitCode: number) => {
-    process.exit(exitCode);
+    }),
+  )
+  .then((exitCode = 0) => {
+    if (forceExit) {
+      process.exit(exitCode);
+    }
+    process.exitCode = exitCode;
   })
   .catch((err: Error) => {
     // eslint-disable-next-line  no-console

@@ -1,22 +1,16 @@
 import express from 'express';
-import { resolve } from 'path';
+import { dirname, resolve } from 'path';
 import { getGlobalVariable } from '../../utils/env';
-import {
-  appendToFile,
-  copyFile,
-  expectFileToExist,
-  expectFileToMatch,
-  replaceInFile,
-  writeFile,
-} from '../../utils/fs';
+import { appendToFile, copyFile, createDir, replaceInFile, writeFile } from '../../utils/fs';
 import { installPackage } from '../../utils/packages';
-import { ng } from '../../utils/process';
 import { updateJsonFile } from '../../utils/project';
-import { expectToFail } from '../../utils/utils';
 import { readNgVersion } from '../../utils/version';
+import { Server } from 'http';
+import { AddressInfo } from 'net';
 
 // Configurations for each locale.
-export const baseDir = 'dist/test-project';
+const translationFile = 'src/locale/messages.xlf';
+export const baseDir = 'dist/test-project/browser';
 export const langTranslations = [
   {
     lang: 'en-US',
@@ -67,54 +61,52 @@ export const langTranslations = [
 ];
 export const sourceLocale = langTranslations[0].lang;
 
-export const externalServer = (outputPath: string, baseUrl = '/') => {
+export interface ExternalServer {
+  readonly server: Server;
+  readonly port: number;
+  readonly url: string;
+}
+
+/**
+ * Create an `express` `http.Server` listening on a random port.
+ *
+ * Call .close() on the server return value to close the server.
+ */
+export async function externalServer(outputPath: string, baseUrl = '/'): Promise<ExternalServer> {
   const app = express();
   app.use(baseUrl, express.static(resolve(outputPath)));
 
-  // call .close() on the return value to close the server.
-  return app.listen(4200, 'localhost');
+  return new Promise((resolve) => {
+    const server = app.listen(0, 'localhost', () => {
+      const { port } = server.address() as AddressInfo;
+
+      resolve({
+        server,
+        port,
+        url: `http://localhost:${port}${baseUrl}`,
+      });
+    });
+  });
+}
+
+export const baseHrefs: { [l: string]: string } = {
+  'en-US': '/en/',
+  fr: '/fr-FR/',
+  de: '',
 };
 
-export const formats = {
-  'xlf': {
-    ext: 'xlf',
-    sourceCheck: 'source-language="en-US"',
-    replacements: [[/source/g, 'target']],
-  },
-  'xlf2': {
-    ext: 'xlf',
-    sourceCheck: 'srcLang="en-US"',
-    replacements: [[/source/g, 'target']],
-  },
-  'xmb': {
-    ext: 'xmb',
-    sourceCheck: '<!DOCTYPE messagebundle',
-    replacements: [
-      [/messagebundle/g, 'translationbundle'],
-      [/msg/g, 'translation'],
-      [/<source>.*?<\/source>/g, ''],
-    ],
-  },
-  'json': {
-    ext: 'json',
-    sourceCheck: '"locale": "en-US"',
-    replacements: [],
-  },
-  'arb': {
-    ext: 'arb',
-    sourceCheck: '"@@locale": "en-US"',
-    replacements: [],
-  },
-};
-
-export async function setupI18nConfig(format: keyof typeof formats = 'xlf') {
+export async function setupI18nConfig() {
   // Add component with i18n content, both translations and localeData (plural, dates).
   await writeFile(
     'src/app/app.component.ts',
     `
     import { Component, Inject, LOCALE_ID } from '@angular/core';
+    import { DatePipe } from '@angular/common';
+
     @Component({
       selector: 'app-root',
+      imports: [DatePipe],
+      standalone: true,
       templateUrl: './app.component.html'
     })
     export class AppComponent {
@@ -133,6 +125,41 @@ export async function setupI18nConfig(format: keyof typeof formats = 'xlf') {
     <p id="date">{{ jan | date : 'LLLL' }}</p>
     <p id="plural" i18n>Updated {minutes, plural, =0 {just now} =1 {one minute ago} other {{{minutes}} minutes ago}}</p>
   `,
+  );
+
+  await createDir(dirname(translationFile));
+  await writeFile(
+    translationFile,
+    `
+    <?xml version="1.0" encoding="UTF-8" ?>
+    <xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
+      <file source-language="en-US" datatype="plaintext" original="ng2.template">
+        <body>
+          <trans-unit id="4286451273117902052" datatype="html">
+            <source>Hello <x id="INTERPOLATION" equiv-text="{{ title }}"/>! </source>
+            <context-group purpose="location">
+              <context context-type="sourcefile">src/app/app.component.html</context>
+              <context context-type="linenumber">2,3</context>
+            </context-group>
+            <note priority="1" from="description">An introduction header for this sample</note>
+          </trans-unit>
+          <trans-unit id="4606963464835766483" datatype="html">
+            <source>Updated <x id="ICU" equiv-text="{minutes, plural, =0 {just now} =1 {one minute ago} other {{{minutes}} minutes ago}}" xid="1887283401472369100"/></source>
+            <context-group purpose="location">
+              <context context-type="sourcefile">src/app/app.component.html</context>
+              <context context-type="linenumber">5,6</context>
+            </context-group>
+          </trans-unit>
+          <trans-unit id="2002272803511843863" datatype="html">
+            <source>{VAR_PLURAL, plural, =0 {just now} =1 {one minute ago} other {<x id="INTERPOLATION"/> minutes ago}}</source>
+            <context-group purpose="location">
+              <context context-type="sourcefile">src/app/app.component.html</context>
+              <context context-type="linenumber">5,6</context>
+            </context-group>
+          </trans-unit>
+        </body>
+      </file>
+    </xliff>`,
   );
 
   // Add a dynamic import to ensure syntax is supported
@@ -191,18 +218,16 @@ export async function setupI18nConfig(format: keyof typeof formats = 'xlf') {
 
     // Always error on missing translations.
     appArchitect['build'].options.optimization = true;
-    appArchitect['build'].options.buildOptimizer = true;
     appArchitect['build'].options.aot = true;
-    appArchitect['build'].options.fileReplacements = [
-      {
-        replace: 'src/environments/environment.ts',
-        with: 'src/environments/environment.prod.ts',
-      },
-    ];
     appArchitect['build'].options.i18nMissingTranslation = 'error';
-    appArchitect['build'].options.vendorChunk = true;
     appArchitect['build'].options.sourceMap = true;
     appArchitect['build'].options.outputHashing = 'none';
+
+    const useWebpackBuilder = !getGlobalVariable('argv')['esbuild'];
+    if (useWebpackBuilder) {
+      appArchitect['build'].options.buildOptimizer = true;
+      appArchitect['build'].options.vendorChunk = true;
+    }
 
     // Enable localization for all locales
     appArchitect['build'].options.localize = true;
@@ -214,11 +239,10 @@ export async function setupI18nConfig(format: keyof typeof formats = 'xlf') {
       if (lang === sourceLocale) {
         i18n.sourceLocale = lang;
       } else {
-        i18n.locales[lang] = `src/locale/messages.${lang}.${formats[format].ext}`;
+        i18n.locales[lang] = `src/locale/messages.${lang}.xlf`;
       }
 
       buildConfigs[lang] = { localize: [lang] };
-
       serveConfigs[lang] = { browserTarget: `test-project:build:${lang}` };
       e2eConfigs[lang] = {
         specs: [`./src/app.${lang}.e2e-spec.ts`],
@@ -232,32 +256,24 @@ export async function setupI18nConfig(format: keyof typeof formats = 'xlf') {
   if (getGlobalVariable('argv')['ng-snapshots']) {
     localizeVersion = require('../../ng-snapshot/package.json').dependencies['@angular/localize'];
   }
+
   await installPackage(localizeVersion);
-
-  // Extract the translation messages.
-  await ng('extract-i18n', '--output-path=src/locale', `--format=${format}`);
-  const translationFile = `src/locale/messages.${formats[format].ext}`;
-  await expectFileToExist(translationFile);
-  await expectFileToMatch(translationFile, formats[format].sourceCheck);
-
-  if (format !== 'json') {
-    await expectFileToMatch(translationFile, `An introduction header for this sample`);
-  }
 
   // Make translations for each language.
   for (const { lang, translationReplacements } of langTranslations) {
     if (lang != sourceLocale) {
-      await copyFile(translationFile, `src/locale/messages.${lang}.${formats[format].ext}`);
-      for (const replacements of translationReplacements) {
+      await copyFile(translationFile, `src/locale/messages.${lang}.xlf`);
+      for (const replacements of translationReplacements!) {
         await replaceInFile(
-          `src/locale/messages.${lang}.${formats[format].ext}`,
+          `src/locale/messages.${lang}.xlf`,
           new RegExp(replacements[0], 'g'),
           replacements[1] as string,
         );
       }
-      for (const replacement of formats[format].replacements) {
+
+      for (const replacement of [[/source/g, 'target']]) {
         await replaceInFile(
-          `src/locale/messages.${lang}.${formats[format].ext}`,
+          `src/locale/messages.${lang}.xlf`,
           new RegExp(replacement[0], 'g'),
           replacement[1] as string,
         );

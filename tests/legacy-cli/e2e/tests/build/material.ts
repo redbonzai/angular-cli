@@ -1,5 +1,5 @@
 import { getGlobalVariable } from '../../utils/env';
-import { replaceInFile } from '../../utils/fs';
+import { readFile, replaceInFile } from '../../utils/fs';
 import { installPackage, installWorkspacePackages } from '../../utils/packages';
 import { ng } from '../../utils/process';
 import { isPrereleaseCli, updateJsonFile } from '../../utils/project';
@@ -7,7 +7,7 @@ import { isPrereleaseCli, updateJsonFile } from '../../utils/project';
 const snapshots = require('../../ng-snapshot/package.json');
 
 export default async function () {
-  const tag = await isPrereleaseCli() ?  '@next' : '';
+  let tag = (await isPrereleaseCli()) ? '@next' : '';
   await ng('add', `@angular/material${tag}`, '--skip-confirmation');
 
   const isSnapshotBuild = getGlobalVariable('argv')['ng-snapshots'];
@@ -25,10 +25,15 @@ export default async function () {
       dependencies['@angular/material-moment-adapter'] =
         snapshots.dependencies['@angular/material-moment-adapter'];
     });
-
     await installWorkspacePackages();
   } else {
-    await installPackage('@angular/material-moment-adapter');
+    if (!tag) {
+      const installedMaterialVersion = JSON.parse(await readFile('package.json'))['dependencies'][
+        '@angular/material'
+      ];
+      tag = `@${installedMaterialVersion}`;
+    }
+    await installPackage(`@angular/material-moment-adapter${tag}`);
   }
 
   await installPackage('moment');
@@ -38,10 +43,10 @@ export default async function () {
   // Ensure moment adapter works (uses unique importing mechanism for moment)
   // Issue: https://github.com/angular/angular-cli/issues/17320
   await replaceInFile(
-    'src/app/app.module.ts',
-    `import { AppComponent } from './app.component';`,
+    'src/app/app.config.ts',
+    `import { ApplicationConfig } from '@angular/core';`,
     `
-    import { AppComponent } from './app.component';
+    import { ApplicationConfig } from '@angular/core';
     import {
       MomentDateAdapter,
       MAT_MOMENT_DATE_FORMATS
@@ -55,10 +60,11 @@ export default async function () {
   );
 
   await replaceInFile(
-    'src/app/app.module.ts',
-    `providers: []`,
+    'src/app/app.config.ts',
+    `providers: [provideRouter(routes) ]`,
     `
     providers: [
+      provideRouter(routes),
       {
         provide: DateAdapter,
         useClass: MomentDateAdapter,
@@ -72,5 +78,5 @@ export default async function () {
   `,
   );
 
-  await ng('e2e', '--prod');
+  await ng('e2e', '--configuration=production');
 }

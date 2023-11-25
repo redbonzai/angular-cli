@@ -9,6 +9,7 @@
 import { Architect } from '@angular-devkit/architect';
 import { BrowserBuilderOutput } from '@angular-devkit/build-angular';
 import { join, normalize, tags, virtualFs } from '@angular-devkit/core';
+import { lastValueFrom } from 'rxjs';
 import { createArchitect, host } from '../../../testing/test-utils';
 
 describe('Browser Builder base href', () => {
@@ -32,14 +33,35 @@ describe('Browser Builder base href', () => {
     const output = (await run.result) as BrowserBuilderOutput;
 
     expect(output.success).toBe(true);
-    const fileName = join(normalize(output.outputPath), 'index.html');
-    const content = virtualFs.fileBufferToString(await host.read(fileName).toPromise());
+    const fileName = join(normalize(output.outputs[0].path), 'index.html');
+    const content = virtualFs.fileBufferToString(await lastValueFrom(host.read(fileName)));
     expect(content).toMatch(/<base href="\/myUrl">/);
 
     await run.stop();
   });
 
-  it('should insert base href in the the correct position', async () => {
+  it('should not override base href in HTML when option is not set', async () => {
+    host.writeMultipleFiles({
+      'src/index.html': `
+      <html>
+        <head><base href="."></head>
+        <body></body>
+      </html>
+      `,
+    });
+
+    const run = await architect.scheduleTarget(targetSpec);
+    const output = (await run.result) as BrowserBuilderOutput;
+
+    expect(output.success).toBeTrue();
+    const fileName = join(normalize(output.outputs[0].path), 'index.html');
+    const content = virtualFs.fileBufferToString(await lastValueFrom(host.read(fileName)));
+    expect(content).toContain(`<base href=".">`);
+
+    await run.stop();
+  });
+
+  it('should insert base href in the correct position', async () => {
     host.writeMultipleFiles({
       'src/index.html': tags.oneLine`
         <html><head><meta charset="UTF-8"></head>
@@ -51,8 +73,10 @@ describe('Browser Builder base href', () => {
     const run = await architect.scheduleTarget(targetSpec, overrides);
     const output = (await run.result) as BrowserBuilderOutput;
     expect(output.success).toBe(true);
-    const fileName = join(normalize(output.outputPath), 'index.html');
-    const content = virtualFs.fileBufferToString(await host.read(normalize(fileName)).toPromise());
+    const fileName = join(normalize(output.outputs[0].path), 'index.html');
+    const content = virtualFs.fileBufferToString(
+      await lastValueFrom(host.read(normalize(fileName))),
+    );
     expect(content).toContain('<head><base href="/myUrl"><meta charset="UTF-8">');
     await run.stop();
   });

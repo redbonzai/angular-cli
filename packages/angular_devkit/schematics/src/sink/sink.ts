@@ -9,12 +9,16 @@
 import {
   Observable,
   concat,
+  concatMap,
+  defaultIfEmpty,
   defer as deferObservable,
+  ignoreElements,
   isObservable,
+  map,
+  mergeMap,
   from as observableFrom,
   of as observableOf,
 } from 'rxjs';
-import { concatMap, ignoreElements, map, mergeMap } from 'rxjs/operators';
 import { FileAlreadyExistException, FileDoesNotExistException } from '../exception/exception';
 import {
   Action,
@@ -33,9 +37,8 @@ export interface Sink {
 const Noop = function () {};
 
 export abstract class SimpleSinkBase implements Sink {
-  preCommitAction: (
-    action: Action,
-  ) => void | Action | PromiseLike<Action> | Observable<Action> = Noop;
+  preCommitAction: (action: Action) => void | Action | PromiseLike<Action> | Observable<Action> =
+    Noop;
   postCommitAction: (action: Action) => void | Observable<void> = Noop;
   preCommit: () => void | Observable<void> = Noop;
   postCommit: () => void | Observable<void> = Noop;
@@ -118,7 +121,7 @@ export abstract class SimpleSinkBase implements Sink {
     return concat(
       this.validateSingleAction(action),
       new Observable<void>((observer) => {
-        let committed = null;
+        let committed: Observable<void> | null = null;
         switch (action.kind) {
           case 'o':
             committed = this._overwriteFile(action.path, action.content);
@@ -168,7 +171,7 @@ export abstract class SimpleSinkBase implements Sink {
       ),
       deferObservable(() => this._done()),
       deferObservable(() => this.postCommit() || observableOf(null)),
-    ).pipe(ignoreElements());
+    ).pipe(ignoreElements(), defaultIfEmpty(undefined));
   }
 }
 

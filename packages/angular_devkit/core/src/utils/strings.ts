@@ -74,13 +74,14 @@ export function camelize(str: string): string {
 /**
  Returns the UpperCamelCase form of a string.
 
+ @example
  ```javascript
  'innerHTML'.classify();          // 'InnerHTML'
  'action_name'.classify();        // 'ActionName'
  'css-class-name'.classify();     // 'CssClassName'
  'my favorite items'.classify();  // 'MyFavoriteItems'
+ 'app.component'.classify();      // 'AppComponent'
  ```
-
  @method classify
  @param {String} str the string to classify
  @return {String} the classified string
@@ -89,11 +90,11 @@ export function classify(str: string): string {
   return str
     .split('.')
     .map((part) => capitalize(camelize(part)))
-    .join('.');
+    .join('');
 }
 
 /**
- More general than decamelize. Returns the lower\_case\_and\_underscored
+ More general than decamelize. Returns the lower_case_and_underscored
  form of a string.
 
  ```javascript
@@ -129,7 +130,7 @@ export function underscore(str: string): string {
  @return {String} The capitalized string.
  */
 export function capitalize(str: string): string {
-  return str.charAt(0).toUpperCase() + str.substr(1);
+  return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
 /**
@@ -151,7 +152,7 @@ export function levenshtein(a: string, b: string): number {
     return a.length;
   }
 
-  const matrix = [];
+  const matrix: number[][] = [];
 
   // increment along the first column of each row
   for (let i = 0; i <= b.length; i++) {

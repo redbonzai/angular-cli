@@ -1,4 +1,4 @@
-load("@npm//@bazel/typescript:index.bzl", "ts_library")
+load("//tools:defaults.bzl", "ts_library")
 
 # Copyright Google Inc. All Rights Reserved.
 #
@@ -6,7 +6,7 @@ load("@npm//@bazel/typescript:index.bzl", "ts_library")
 # found in the LICENSE file at https://angular.io/license
 package(default_visibility = ["//visibility:public"])
 
-licenses(["notice"])  # MIT License
+licenses(["notice"])
 
 ts_library(
     name = "file_system_engine_host_test_lib",
@@ -21,8 +21,6 @@ ts_library(
             "**/*.js",
         ],
     ),
-    devmode_module = "commonjs",
-    devmode_target = "es2018",
     deps = [
         "//packages/angular_devkit/schematics",
         # ":testing",

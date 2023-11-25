@@ -6,7 +6,7 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { Path, getSystemPath, json } from '@angular-devkit/core';
+import { json, logging } from '@angular-devkit/core';
 import {
   AssetPatternClass,
   Schema as BrowserBuilderSchema,
@@ -20,6 +20,7 @@ import {
   normalizeFileReplacements,
 } from './normalize-file-replacements';
 import { NormalizedOptimizationOptions, normalizeOptimization } from './normalize-optimization';
+import { normalizePolyfills } from './normalize-polyfills';
 import { normalizeSourceMaps } from './normalize-source-maps';
 import { getSupportedBrowsers } from './supported-browsers';
 
@@ -32,24 +33,30 @@ export type NormalizedBrowserBuilderSchema = BrowserBuilderSchema &
     assets: AssetPatternClass[];
     fileReplacements: NormalizedFileReplacement[];
     optimization: NormalizedOptimizationOptions;
+    polyfills: string[];
   };
 
 export function normalizeBrowserSchema(
-  root: Path,
-  projectRoot: Path,
-  sourceRoot: Path | undefined,
+  workspaceRoot: string,
+  projectRoot: string,
+  projectSourceRoot: string | undefined,
   options: BrowserBuilderSchema,
   metadata: json.JsonObject,
+  logger: logging.LoggerApi,
 ): NormalizedBrowserBuilderSchema {
-  const normalizedSourceMapOptions = normalizeSourceMaps(options.sourceMap || false);
-
   return {
     ...options,
-    cache: normalizeCacheOptions(metadata, getSystemPath(root)),
-    assets: normalizeAssetPatterns(options.assets || [], root, projectRoot, sourceRoot),
-    fileReplacements: normalizeFileReplacements(options.fileReplacements || [], root),
+    cache: normalizeCacheOptions(metadata, workspaceRoot),
+    assets: normalizeAssetPatterns(
+      options.assets || [],
+      workspaceRoot,
+      projectRoot,
+      projectSourceRoot,
+    ),
+    fileReplacements: normalizeFileReplacements(options.fileReplacements || [], workspaceRoot),
     optimization: normalizeOptimization(options.optimization),
-    sourceMap: normalizedSourceMapOptions,
+    sourceMap: normalizeSourceMaps(options.sourceMap || false),
+    polyfills: normalizePolyfills(options.polyfills, workspaceRoot),
     preserveSymlinks:
       options.preserveSymlinks === undefined
         ? process.execArgv.includes('--preserve-symlinks')
@@ -66,6 +73,6 @@ export function normalizeBrowserSchema(
     // A value of 0 is falsy and will disable polling rather then enable
     // 500 ms is a sensible default in this case
     poll: options.poll === 0 ? 500 : options.poll,
-    supportedBrowsers: getSupportedBrowsers(getSystemPath(projectRoot)),
+    supportedBrowsers: getSupportedBrowsers(projectRoot, logger),
   };
 }

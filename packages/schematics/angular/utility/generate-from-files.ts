@@ -6,7 +6,6 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { strings } from '@angular-devkit/core';
 import {
   Rule,
   Tree,
@@ -17,9 +16,11 @@ import {
   mergeWith,
   move,
   noop,
+  strings,
   url,
 } from '@angular-devkit/schematics';
 import { parseName } from './parse-name';
+import { validateClassName } from './validation';
 import { createDefaultPath } from './workspace';
 
 export interface GenerateFromFilesOptions {
@@ -27,8 +28,9 @@ export interface GenerateFromFilesOptions {
   name: string;
   path?: string;
   prefix?: string;
-  project?: string;
+  project: string;
   skipTests?: boolean;
+  templateFilesDirectory?: string;
 }
 
 export function generateFromFiles(
@@ -36,7 +38,7 @@ export function generateFromFiles(
   extraTemplateValues: Record<string, string | ((v: string) => string)> = {},
 ): Rule {
   return async (host: Tree) => {
-    options.path ??= await createDefaultPath(host, options.project as string);
+    options.path ??= await createDefaultPath(host, options.project);
     options.prefix ??= '';
     options.flat ??= true;
 
@@ -44,7 +46,10 @@ export function generateFromFiles(
     options.name = parsedPath.name;
     options.path = parsedPath.path;
 
-    const templateSource = apply(url('./files'), [
+    validateClassName(strings.classify(options.name));
+
+    const templateFilesDirectory = options.templateFilesDirectory ?? './files';
+    const templateSource = apply(url(templateFilesDirectory), [
       options.skipTests ? filter((path) => !path.endsWith('.spec.ts.template')) : noop(),
       applyTemplates({
         ...strings,

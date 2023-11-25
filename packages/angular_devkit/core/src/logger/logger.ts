@@ -6,7 +6,7 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { Observable, Operator, PartialObserver, Subject, Subscription, empty } from 'rxjs';
+import { EMPTY, Observable, Operator, PartialObserver, Subject, Subscription } from 'rxjs';
 import { JsonObject } from '../json/utils';
 
 export interface LoggerMetadata extends JsonObject {
@@ -34,7 +34,7 @@ export class Logger extends Observable<LogEntry> implements LoggerApi {
   protected readonly _subject: Subject<LogEntry> = new Subject<LogEntry>();
   protected _metadata: LoggerMetadata;
 
-  private _obs: Observable<LogEntry> = empty();
+  private _obs: Observable<LogEntry> = EMPTY;
   private _subscription: Subscription | null = null;
 
   protected get _observable() {
@@ -161,7 +161,11 @@ export class Logger extends Observable<LogEntry> implements LoggerApi {
       arguments as unknown as Parameters<Observable<LogEntry>['subscribe']>,
     );
   }
-  override forEach(next: (value: LogEntry) => void, PromiseCtor?: typeof Promise): Promise<void> {
-    return this._observable.forEach(next, PromiseCtor);
+
+  override forEach(
+    next: (value: LogEntry) => void,
+    promiseCtor: PromiseConstructorLike = Promise,
+  ): Promise<void> {
+    return this._observable.forEach(next, promiseCtor);
   }
 }

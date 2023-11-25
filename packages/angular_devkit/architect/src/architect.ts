@@ -6,18 +6,21 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { analytics, experimental, json, logging } from '@angular-devkit/core';
-import { Observable, from, merge, of, onErrorResumeNext } from 'rxjs';
+import { json, logging } from '@angular-devkit/core';
 import {
+  Observable,
   concatMap,
   first,
+  from,
   ignoreElements,
   last,
   map,
+  merge,
+  of,
+  onErrorResumeNext,
   shareReplay,
-  switchMap,
   takeUntil,
-} from 'rxjs/operators';
+} from 'rxjs';
 import {
   BuilderInfo,
   BuilderInput,
@@ -28,6 +31,20 @@ import {
   targetStringFromTarget,
 } from './api';
 import { ArchitectHost, BuilderDescription, BuilderJobHandler } from './internal';
+import {
+  FallbackRegistry,
+  JobHandler,
+  JobHandlerContext,
+  JobInboundMessage,
+  JobInboundMessageKind,
+  JobName,
+  JobOutboundMessageKind,
+  Registry,
+  Scheduler,
+  SimpleJobRegistry,
+  SimpleScheduler,
+  createJobHandler,
+} from './jobs';
 import { scheduleByName, scheduleByTarget } from './schedule-by-name';
 
 const inputSchema = require('./input-schema.json');
@@ -48,11 +65,11 @@ function _createJobHandlerFromBuilderInfo(
     info,
   };
 
-  function handler(argument: json.JsonObject, context: experimental.jobs.JobHandlerContext) {
+  function handler(argument: json.JsonObject, context: JobHandlerContext) {
     // Add input validation to the inbound bus.
     const inboundBusWithInputValidation = context.inboundBus.pipe(
-      concatMap((message) => {
-        if (message.kind === experimental.jobs.JobInboundMessageKind.Input) {
+      concatMap(async (message) => {
+        if (message.kind === JobInboundMessageKind.Input) {
           const v = message.value as BuilderInput;
           const options = {
             ...baseOptions,
@@ -60,20 +77,17 @@ function _createJobHandlerFromBuilderInfo(
           };
 
           // Validate v against the options schema.
-          return registry.compile(info.optionSchema).pipe(
-            concatMap((validation) => validation(options)),
-            map((validationResult: json.schema.SchemaValidatorResult) => {
-              const { data, success, errors } = validationResult;
-              if (success) {
-                return { ...v, options: data } as BuilderInput;
-              }
+          const validation = await registry.compile(info.optionSchema);
+          const validationResult = await validation(options);
+          const { data, success, errors } = validationResult;
 
-              throw new json.schema.SchemaValidationException(errors);
-            }),
-            map((value) => ({ ...message, value })),
-          );
+          if (!success) {
+            throw new json.schema.SchemaValidationException(errors);
+          }
+
+          return { ...message, value: { ...v, options: data } } as JobInboundMessage<BuilderInput>;
         } else {
-          return of(message as experimental.jobs.JobInboundMessage<BuilderInput>);
+          return message as JobInboundMessage<BuilderInput>;
         }
       }),
       // Using a share replay because the job might be synchronously sending input, but
@@ -93,14 +107,14 @@ function _createJobHandlerFromBuilderInfo(
 
         return builder.handler(argument, { ...context, inboundBus }).pipe(
           map((output) => {
-            if (output.kind === experimental.jobs.JobOutboundMessageKind.Output) {
+            if (output.kind === JobOutboundMessageKind.Output) {
               // Add target to it.
               return {
                 ...output,
                 value: {
                   ...output.value,
                   ...(target ? { target } : 0),
-                } as json.JsonObject,
+                } as unknown as json.JsonObject,
               };
             } else {
               return output;
@@ -108,7 +122,7 @@ function _createJobHandlerFromBuilderInfo(
           }),
         );
       }),
-      // Share subscriptions to the output, otherwise the the handler will be re-run.
+      // Share subscriptions to the output, otherwise the handler will be re-run.
       shareReplay(),
     );
 
@@ -128,7 +142,6 @@ function _createJobHandlerFromBuilderInfo(
 
 export interface ScheduleOptions {
   logger?: logging.Logger;
-  analytics?: analytics.Analytics;
 }
 
 /**
@@ -198,7 +211,7 @@ class ArchitectBuilderJobRegistry implements BuilderRegistry {
 
   get<A extends json.JsonObject, I extends BuilderInput, O extends BuilderOutput>(
     name: string,
-  ): Observable<experimental.jobs.JobHandler<A, I, O> | null> {
+  ): Observable<JobHandler<A, I, O> | null> {
     const m = name.match(/^([^:]+):([^:]+)$/i);
     if (!m) {
       return of(null);
@@ -207,7 +220,7 @@ class ArchitectBuilderJobRegistry implements BuilderRegistry {
     return from(this._resolveBuilder(name)).pipe(
       concatMap((builderInfo) => (builderInfo ? this._createBuilder(builderInfo) : of(null))),
       first(null, null),
-    ) as Observable<experimental.jobs.JobHandler<A, I, O> | null>;
+    ) as Observable<JobHandler<A, I, O> | null>;
   }
 }
 
@@ -217,7 +230,7 @@ class ArchitectBuilderJobRegistry implements BuilderRegistry {
 class ArchitectTargetJobRegistry extends ArchitectBuilderJobRegistry {
   override get<A extends json.JsonObject, I extends BuilderInput, O extends BuilderOutput>(
     name: string,
-  ): Observable<experimental.jobs.JobHandler<A, I, O> | null> {
+  ): Observable<JobHandler<A, I, O> | null> {
     const m = name.match(/^{([^:]+):([^:]+)(?::([^:]*))?}$/i);
     if (!m) {
       return of(null);
@@ -251,12 +264,12 @@ class ArchitectTargetJobRegistry extends ArchitectBuilderJobRegistry {
         );
       }),
       first(null, null),
-    ) as Observable<experimental.jobs.JobHandler<A, I, O> | null>;
+    ) as Observable<JobHandler<A, I, O> | null>;
   }
 }
 
 function _getTargetOptionsFactory(host: ArchitectHost) {
-  return experimental.jobs.createJobHandler<Target, json.JsonValue, json.JsonObject>(
+  return createJobHandler<Target, json.JsonValue, json.JsonObject>(
     (target) => {
       return host.getOptionsForTarget(target).then((options) => {
         if (options === null) {
@@ -275,7 +288,7 @@ function _getTargetOptionsFactory(host: ArchitectHost) {
 }
 
 function _getProjectMetadataFactory(host: ArchitectHost) {
-  return experimental.jobs.createJobHandler<Target, json.JsonValue, json.JsonObject>(
+  return createJobHandler<Target, json.JsonValue, json.JsonObject>(
     (target) => {
       return host.getProjectMetadata(target).then((options) => {
         if (options === null) {
@@ -296,7 +309,7 @@ function _getProjectMetadataFactory(host: ArchitectHost) {
 }
 
 function _getBuilderNameForTargetFactory(host: ArchitectHost) {
-  return experimental.jobs.createJobHandler<Target, never, string>(
+  return createJobHandler<Target, never, string>(
     async (target) => {
       const builderName = await host.getBuilderNameForTarget(target);
       if (!builderName) {
@@ -314,7 +327,7 @@ function _getBuilderNameForTargetFactory(host: ArchitectHost) {
 }
 
 function _validateOptionsFactory(host: ArchitectHost, registry: json.schema.SchemaRegistry) {
-  return experimental.jobs.createJobHandler<[string, json.JsonObject], never, json.JsonObject>(
+  return createJobHandler<[string, json.JsonObject], never, json.JsonObject>(
     async ([builderName, options]) => {
       // Get option schema from the host.
       const builderInfo = await host.resolveBuilder(builderName);
@@ -322,19 +335,14 @@ function _validateOptionsFactory(host: ArchitectHost, registry: json.schema.Sche
         throw new Error(`No builder info were found for builder ${JSON.stringify(builderName)}.`);
       }
 
-      return registry
-        .compile(builderInfo.optionSchema)
-        .pipe(
-          concatMap((validation) => validation(options)),
-          switchMap(({ data, success, errors }) => {
-            if (success) {
-              return of(data as json.JsonObject);
-            }
+      const validation = await registry.compile(builderInfo.optionSchema);
+      const { data, success, errors } = await validation(options);
 
-            throw new json.schema.SchemaValidationException(errors);
-          }),
-        )
-        .toPromise();
+      if (!success) {
+        throw new json.schema.SchemaValidationException(errors);
+      }
+
+      return data as json.JsonObject;
     },
     {
       name: '..validateOptions',
@@ -348,33 +356,33 @@ function _validateOptionsFactory(host: ArchitectHost, registry: json.schema.Sche
 }
 
 export class Architect {
-  private readonly _scheduler: experimental.jobs.Scheduler;
+  private readonly _scheduler: Scheduler;
   private readonly _jobCache = new Map<string, Observable<BuilderJobHandler>>();
   private readonly _infoCache = new Map<string, Observable<BuilderInfo>>();
 
   constructor(
     private _host: ArchitectHost,
     registry: json.schema.SchemaRegistry = new json.schema.CoreSchemaRegistry(),
-    additionalJobRegistry?: experimental.jobs.Registry,
+    additionalJobRegistry?: Registry,
   ) {
-    const privateArchitectJobRegistry = new experimental.jobs.SimpleJobRegistry();
+    const privateArchitectJobRegistry = new SimpleJobRegistry();
     // Create private jobs.
     privateArchitectJobRegistry.register(_getTargetOptionsFactory(_host));
     privateArchitectJobRegistry.register(_getBuilderNameForTargetFactory(_host));
     privateArchitectJobRegistry.register(_validateOptionsFactory(_host, registry));
     privateArchitectJobRegistry.register(_getProjectMetadataFactory(_host));
 
-    const jobRegistry = new experimental.jobs.FallbackRegistry([
+    const jobRegistry = new FallbackRegistry([
       new ArchitectTargetJobRegistry(_host, registry, this._jobCache, this._infoCache),
       new ArchitectBuilderJobRegistry(_host, registry, this._jobCache, this._infoCache),
       privateArchitectJobRegistry,
       ...(additionalJobRegistry ? [additionalJobRegistry] : []),
-    ] as experimental.jobs.Registry[]);
+    ] as Registry[]);
 
-    this._scheduler = new experimental.jobs.SimpleScheduler(jobRegistry, registry);
+    this._scheduler = new SimpleScheduler(jobRegistry, registry);
   }
 
-  has(name: experimental.jobs.JobName) {
+  has(name: JobName) {
     return this._scheduler.has(name);
   }
 
@@ -393,7 +401,6 @@ export class Architect {
       logger: scheduleOptions.logger || new logging.NullLogger(),
       currentDirectory: this._host.getCurrentDirectory(),
       workspaceRoot: this._host.getWorkspaceRoot(),
-      analytics: scheduleOptions.analytics,
     });
   }
   scheduleTarget(
@@ -406,7 +413,6 @@ export class Architect {
       logger: scheduleOptions.logger || new logging.NullLogger(),
       currentDirectory: this._host.getCurrentDirectory(),
       workspaceRoot: this._host.getWorkspaceRoot(),
-      analytics: scheduleOptions.analytics,
     });
   }
 }

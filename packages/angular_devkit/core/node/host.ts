@@ -6,8 +6,7 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import type { FSWatcher as ChokidarWatcher } from 'chokidar';
-import fs, {
+import {
   PathLike,
   Stats,
   constants,
@@ -17,23 +16,13 @@ import fs, {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
-  unlinkSync,
   writeFileSync,
-} from 'fs';
-import { dirname as pathDirname } from 'path';
-import { Observable, concat, from as observableFrom, of, throwError } from 'rxjs';
-import { concatMap, map, mergeMap, publish, refCount } from 'rxjs/operators';
-import {
-  Path,
-  PathFragment,
-  dirname,
-  fragment,
-  getSystemPath,
-  join,
-  normalize,
-  virtualFs,
-} from '../src';
+} from 'node:fs';
+import { dirname as pathDirname } from 'node:path';
+import { Observable, map, mergeMap, from as observableFrom, publish, refCount } from 'rxjs';
+import { Path, PathFragment, dirname, fragment, getSystemPath, normalize, virtualFs } from '../src';
 
 async function exists(path: PathLike): Promise<boolean> {
   try {
@@ -48,14 +37,13 @@ async function exists(path: PathLike): Promise<boolean> {
 // This will only be initialized if the watch() method is called.
 // Otherwise chokidar appears only in type positions, and shouldn't be referenced
 // in the JavaScript output.
-let FSWatcher: typeof ChokidarWatcher;
+let FSWatcher: typeof import('chokidar').FSWatcher;
 function loadFSWatcher() {
   if (!FSWatcher) {
     try {
-      // eslint-disable-next-line import/no-extraneous-dependencies
       FSWatcher = require('chokidar').FSWatcher;
     } catch (e) {
-      if (e.code !== 'MODULE_NOT_FOUND') {
+      if ((e as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') {
         throw new Error(
           'As of angular-devkit version 8.0, the "chokidar" package ' +
             'must be installed in order to use watch() features.',
@@ -88,31 +76,8 @@ export class NodeJsAsyncHost implements virtualFs.Host<Stats> {
   }
 
   delete(path: Path): Observable<void> {
-    return this.isDirectory(path).pipe(
-      mergeMap(async (isDirectory) => {
-        if (isDirectory) {
-          // The below should be removed and replaced with just `rm` when support for Node.Js 12 is removed.
-          const { rm, rmdir } = fsPromises as typeof fsPromises & {
-            rm?: (
-              path: fs.PathLike,
-              options?: {
-                force?: boolean;
-                maxRetries?: number;
-                recursive?: boolean;
-                retryDelay?: number;
-              },
-            ) => Promise<void>;
-          };
-
-          if (rm) {
-            await rm(getSystemPath(path), { force: true, recursive: true, maxRetries: 3 });
-          } else {
-            await rmdir(getSystemPath(path), { recursive: true, maxRetries: 3 });
-          }
-        } else {
-          await fsPromises.unlink(getSystemPath(path));
-        }
-      }),
+    return observableFrom(
+      fsPromises.rm(getSystemPath(path), { force: true, recursive: true, maxRetries: 3 }),
     );
   }
 
@@ -176,7 +141,9 @@ export class NodeJsAsyncHost implements virtualFs.Host<Stats> {
           });
         });
 
-      return () => watcher.close();
+      return () => {
+        void watcher.close();
+      };
     }).pipe(publish(), refCount());
   }
 }
@@ -208,45 +175,11 @@ export class NodeJsSyncHost implements virtualFs.Host<Stats> {
   }
 
   delete(path: Path): Observable<void> {
-    return this.isDirectory(path).pipe(
-      concatMap((isDir) => {
-        if (isDir) {
-          const dirPaths = readdirSync(getSystemPath(path));
-          const rmDirComplete = new Observable<void>((obs) => {
-            // The below should be removed and replaced with just `rmSync` when support for Node.Js 12 is removed.
-            const { rmSync, rmdirSync } = fs as typeof fs & {
-              rmSync?: (
-                path: fs.PathLike,
-                options?: {
-                  force?: boolean;
-                  maxRetries?: number;
-                  recursive?: boolean;
-                  retryDelay?: number;
-                },
-              ) => void;
-            };
+    return new Observable<void>((obs) => {
+      rmSync(getSystemPath(path), { force: true, recursive: true, maxRetries: 3 });
 
-            if (rmSync) {
-              rmSync(getSystemPath(path), { force: true, recursive: true, maxRetries: 3 });
-            } else {
-              rmdirSync(getSystemPath(path), { recursive: true, maxRetries: 3 });
-            }
-
-            obs.complete();
-          });
-
-          return concat(...dirPaths.map((name) => this.delete(join(path, name))), rmDirComplete);
-        } else {
-          try {
-            unlinkSync(getSystemPath(path));
-          } catch (err) {
-            return throwError(err);
-          }
-
-          return of(undefined);
-        }
-      }),
-    );
+      obs.complete();
+    });
   }
 
   rename(from: Path, to: Path): Observable<void> {
@@ -325,7 +258,9 @@ export class NodeJsSyncHost implements virtualFs.Host<Stats> {
           });
         });
 
-      return () => watcher.close();
+      return () => {
+        void watcher.close();
+      };
     }).pipe(publish(), refCount());
   }
 }

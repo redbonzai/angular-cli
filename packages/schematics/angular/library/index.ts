@@ -6,7 +6,7 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { join, normalize, strings } from '@angular-devkit/core';
+import { join, normalize } from '@angular-devkit/core';
 import {
   Rule,
   SchematicContext,
@@ -18,6 +18,7 @@ import {
   move,
   noop,
   schematic,
+  strings,
   url,
 } from '@angular-devkit/schematics';
 import { NodePackageInstallTask } from '@angular-devkit/schematics/tasks';
@@ -82,10 +83,6 @@ function addLibToWorkspaceFile(
   projectName: string,
 ): Rule {
   return updateWorkspace((workspace) => {
-    if (workspace.projects.size === 0) {
-      workspace.extensions.defaultProject = projectName;
-    }
-
     workspace.projects.add({
       name: projectName,
       root: projectRoot,
@@ -111,9 +108,8 @@ function addLibToWorkspaceFile(
         test: {
           builder: Builders.Karma,
           options: {
-            main: `${projectRoot}/src/test.ts`,
             tsConfig: `${projectRoot}/tsconfig.spec.json`,
-            karmaConfig: `${projectRoot}/karma.conf.js`,
+            polyfills: ['zone.js', 'zone.js/testing'],
           },
         },
       },
@@ -135,44 +131,49 @@ export default function (options: LibraryOptions): Rule {
     const workspace = await getWorkspace(host);
     const newProjectRoot = (workspace.extensions.newProjectRoot as string | undefined) || '';
 
-    let folderName = packageName.startsWith('@') ? packageName.substr(1) : packageName;
+    let folderName = packageName.startsWith('@') ? packageName.slice(1) : packageName;
     if (/[A-Z]/.test(folderName)) {
       folderName = strings.dasherize(folderName);
     }
 
-    const projectRoot = join(normalize(newProjectRoot), folderName);
+    const libDir =
+      options.projectRoot !== undefined
+        ? normalize(options.projectRoot)
+        : join(normalize(newProjectRoot), folderName);
+
     const distRoot = `dist/${folderName}`;
-    const pathImportLib = `${distRoot}/${folderName.replace('/', '-')}`;
-    const sourceDir = `${projectRoot}/src/lib`;
+    const sourceDir = `${libDir}/src/lib`;
 
     const templateSource = apply(url('./files'), [
       applyTemplates({
         ...strings,
         ...options,
         packageName,
-        projectRoot,
+        libDir,
         distRoot,
-        relativePathToWorkspaceRoot: relativePathToWorkspaceRoot(projectRoot),
+        relativePathToWorkspaceRoot: relativePathToWorkspaceRoot(libDir),
         prefix,
         angularLatestVersion: latestVersions.Angular.replace(/~|\^/, ''),
         tsLibLatestVersion: latestVersions['tslib'].replace(/~|\^/, ''),
         folderName,
       }),
-      move(projectRoot),
+      move(libDir),
     ]);
 
     return chain([
       mergeWith(templateSource),
-      addLibToWorkspaceFile(options, projectRoot, packageName),
+      addLibToWorkspaceFile(options, libDir, packageName),
       options.skipPackageJson ? noop() : addDependenciesToPackageJson(),
-      options.skipTsConfig ? noop() : updateTsConfig(packageName, pathImportLib, distRoot),
-      schematic('module', {
-        name: options.name,
-        commonModule: false,
-        flat: true,
-        path: sourceDir,
-        project: packageName,
-      }),
+      options.skipTsConfig ? noop() : updateTsConfig(packageName, './' + distRoot),
+      options.standalone
+        ? noop()
+        : schematic('module', {
+            name: options.name,
+            commonModule: false,
+            flat: true,
+            path: sourceDir,
+            project: packageName,
+          }),
       schematic('component', {
         name: options.name,
         selector: `${prefix}-${options.name}`,
@@ -181,6 +182,7 @@ export default function (options: LibraryOptions): Rule {
         flat: true,
         path: sourceDir,
         export: true,
+        standalone: options.standalone,
         project: packageName,
       }),
       schematic('service', {

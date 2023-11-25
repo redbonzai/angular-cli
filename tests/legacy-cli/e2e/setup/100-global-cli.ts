@@ -1,23 +1,24 @@
 import { getGlobalVariable } from '../utils/env';
-import { exec, silentNpm } from '../utils/process';
+import { globalNpm } from '../utils/process';
 
-export default async function() {
+const NPM_VERSION = '7.24.0';
+const YARN_VERSION = '1.22.18';
+
+export default async function () {
   const argv = getGlobalVariable('argv');
   if (argv.noglobal) {
     return;
   }
 
-  const testRegistry = getGlobalVariable('package-registry');
+  const testRegistry: string = getGlobalVariable('package-registry');
 
-  // Install global Angular CLI.
-  await silentNpm(
+  // Install global Angular CLI being tested, npm+yarn used by e2e tests.
+  await globalNpm([
     'install',
     '--global',
-    '@angular/cli',
     `--registry=${testRegistry}`,
-  );
-
-  try {
-    await exec(process.platform.startsWith('win') ? 'where' : 'which', 'ng');
-  } catch {}
+    '@angular/cli',
+    `npm@${NPM_VERSION}`,
+    `yarn@${YARN_VERSION}`,
+  ]);
 }

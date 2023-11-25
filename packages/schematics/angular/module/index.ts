@@ -6,10 +6,9 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { Path, normalize, strings } from '@angular-devkit/core';
+import { Path, normalize } from '@angular-devkit/core';
 import {
   Rule,
-  SchematicsException,
   Tree,
   apply,
   applyTemplates,
@@ -19,6 +18,7 @@ import {
   move,
   noop,
   schematic,
+  strings,
   url,
 } from '@angular-devkit/schematics';
 import { Schema as ComponentOptions } from '../component/schema';
@@ -32,6 +32,7 @@ import {
   findModuleFromOptions,
 } from '../utility/find-module';
 import { parseName } from '../utility/parse-name';
+import { validateClassName } from '../utility/validation';
 import { createDefaultPath } from '../utility/workspace';
 import { Schema as ModuleOptions, RoutingScope } from './schema';
 
@@ -46,7 +47,7 @@ function buildRelativeModulePath(options: ModuleOptions, modulePath: string): st
   return buildRelativePath(modulePath, importModulePath);
 }
 
-function addDeclarationToNgModule(options: ModuleOptions): Rule {
+function addImportToNgModule(options: ModuleOptions): Rule {
   return (host: Tree) => {
     if (!options.module) {
       return host;
@@ -54,11 +55,7 @@ function addDeclarationToNgModule(options: ModuleOptions): Rule {
 
     const modulePath = options.module;
 
-    const text = host.read(modulePath);
-    if (text === null) {
-      throw new SchematicsException(`File ${modulePath} does not exist.`);
-    }
-    const sourceText = text.toString();
+    const sourceText = host.readText(modulePath);
     const source = ts.createSourceFile(modulePath, sourceText, ts.ScriptTarget.Latest, true);
 
     const relativePath = buildRelativeModulePath(options, modulePath);
@@ -100,12 +97,8 @@ function addRouteDeclarationToNgModule(
       path = options.module;
     }
 
-    const text = host.read(path);
-    if (!text) {
-      throw new Error(`Couldn't find the module nor its routing module.`);
-    }
+    const sourceText = host.readText(path);
 
-    const sourceText = text.toString();
     const addDeclaration = addRouteDeclarationToModule(
       ts.createSourceFile(path, sourceText, ts.ScriptTarget.Latest, true),
       path,
@@ -156,6 +149,7 @@ export default function (options: ModuleOptions): Rule {
     const parsedPath = parseName(options.path, options.name);
     options.name = parsedPath.name;
     options.path = parsedPath.path;
+    validateClassName(strings.classify(options.name));
 
     const templateSource = apply(url('./files'), [
       options.routing || (isLazyLoadedModuleGen && routingModulePath)
@@ -185,7 +179,7 @@ export default function (options: ModuleOptions): Rule {
     };
 
     return chain([
-      !isLazyLoadedModuleGen ? addDeclarationToNgModule(options) : noop(),
+      !isLazyLoadedModuleGen ? addImportToNgModule(options) : noop(),
       addRouteDeclarationToNgModule(options, routingModulePath),
       mergeWith(templateSource),
       isLazyLoadedModuleGen ? schematic('component', componentOptions) : noop(),

@@ -8,35 +8,51 @@
 
 import { BuilderContext, BuilderOutput, createBuilder } from '@angular-devkit/architect';
 import { runWebpack } from '@angular-devkit/build-webpack';
-import { json, tags } from '@angular-devkit/core';
-import * as path from 'path';
-import { Observable, from } from 'rxjs';
-import { concatMap, map } from 'rxjs/operators';
-import { ScriptTarget } from 'typescript';
-import webpack from 'webpack';
+import { readFile } from 'node:fs/promises';
+import * as path from 'node:path';
+import { Observable, concatMap, from } from 'rxjs';
+import webpack, { Configuration } from 'webpack';
+import { getCommonConfig, getStylesConfig } from '../../tools/webpack/configs';
+import { isPlatformServerInstalled } from '../../tools/webpack/utils/helpers';
+import {
+  statsErrorsToString,
+  statsHasErrors,
+  statsHasWarnings,
+  statsWarningsToString,
+  webpackStatsLogger,
+} from '../../tools/webpack/utils/stats';
 import { ExecutionTransformer } from '../../transforms';
-import { NormalizedBrowserBuilderSchema, deleteOutputDir } from '../../utils';
+import {
+  NormalizedBrowserBuilderSchema,
+  deleteOutputDir,
+  normalizeAssetPatterns,
+} from '../../utils';
+import { colors } from '../../utils/color';
+import { copyAssets } from '../../utils/copy-assets';
+import { assertIsError } from '../../utils/error';
 import { i18nInlineEmittedFiles } from '../../utils/i18n-inlining';
 import { I18nOptions } from '../../utils/i18n-options';
 import { ensureOutputPaths } from '../../utils/output-paths';
+import { purgeStaleBuildCache } from '../../utils/purge-cache';
+import { Spinner } from '../../utils/spinner';
 import { assertCompatibleAngularVersion } from '../../utils/version';
-import { generateI18nBrowserWebpackConfigFromContext } from '../../utils/webpack-browser-config';
-import { getCommonConfig, getStylesConfig } from '../../webpack/configs';
-import { webpackStatsLogger } from '../../webpack/utils/stats';
+import {
+  BrowserWebpackConfigOptions,
+  generateI18nBrowserWebpackConfigFromContext,
+} from '../../utils/webpack-browser-config';
 import { Schema as ServerBuilderOptions } from './schema';
 
 /**
  * @experimental Direct usage of this type is considered experimental.
  */
-export type ServerBuilderOutput = json.JsonObject &
-  BuilderOutput & {
-    baseOutputPath: string;
-    outputPaths: string[];
-    /**
-     * @deprecated in version 9. Use 'outputPaths' instead.
-     */
-    outputPath: string;
-  };
+export type ServerBuilderOutput = BuilderOutput & {
+  baseOutputPath: string;
+  outputPath: string;
+  outputs: {
+    locale?: string;
+    path: string;
+  }[];
+};
 
 export { ServerBuilderOptions };
 
@@ -58,31 +74,8 @@ export function execute(
   const baseOutputPath = path.resolve(root, options.outputPath);
   let outputPaths: undefined | Map<string, string>;
 
-  if (typeof options.bundleDependencies === 'string') {
-    options.bundleDependencies = options.bundleDependencies === 'all';
-    context.logger.warn(
-      `Option 'bundleDependencies' string value is deprecated since version 9. Use a boolean value instead.`,
-    );
-  }
-
-  if (!options.bundleDependencies) {
-    // eslint-disable-next-line import/no-extraneous-dependencies
-    const { __processed_by_ivy_ngcc__, main = '' } = require('@angular/core/package.json');
-    if (
-      !__processed_by_ivy_ngcc__ ||
-      !__processed_by_ivy_ngcc__.main ||
-      (main as string).includes('__ivy_ngcc__')
-    ) {
-      context.logger.warn(tags.stripIndent`
-      Warning: Turning off 'bundleDependencies' with Ivy may result in undefined behaviour
-      unless 'node_modules' are transformed using the standalone Angular compatibility compiler (NGCC).
-      See: https://angular.io/guide/ivy#ivy-and-universal-app-shell
-    `);
-    }
-  }
-
   return from(initialize(options, context, transforms.webpackConfiguration)).pipe(
-    concatMap(({ config, i18n, target }) => {
+    concatMap(({ config, i18n, projectRoot, projectSourceRoot }) => {
       return runWebpack(config, context, {
         webpackFactory: require('webpack') as typeof webpack,
         logging: (stats, config) => {
@@ -92,16 +85,55 @@ export function execute(
         },
       }).pipe(
         concatMap(async (output) => {
-          const { emittedFiles = [], outputPath, webpackStats } = output;
+          const { emittedFiles = [], outputPath, webpackStats, success } = output;
           if (!webpackStats) {
             throw new Error('Webpack stats build result is required.');
           }
 
-          let success = output.success;
-          if (success && i18n.shouldInline) {
-            outputPaths = ensureOutputPaths(baseOutputPath, i18n);
+          if (!success) {
+            if (statsHasWarnings(webpackStats)) {
+              context.logger.warn(statsWarningsToString(webpackStats, { colors: true }));
+            }
+            if (statsHasErrors(webpackStats)) {
+              context.logger.error(statsErrorsToString(webpackStats, { colors: true }));
+            }
 
-            success = await i18nInlineEmittedFiles(
+            return output;
+          }
+
+          const spinner = new Spinner();
+          spinner.enabled = options.progress !== false;
+          outputPaths = ensureOutputPaths(baseOutputPath, i18n);
+
+          // Copy assets
+          if (!options.watch && options.assets?.length) {
+            spinner.start('Copying assets...');
+            try {
+              await copyAssets(
+                normalizeAssetPatterns(
+                  options.assets,
+                  context.workspaceRoot,
+                  projectRoot,
+                  projectSourceRoot,
+                ),
+                Array.from(outputPaths.values()),
+                context.workspaceRoot,
+              );
+              spinner.succeed('Copying assets complete.');
+            } catch (err) {
+              spinner.fail(colors.redBright('Copying of assets failed.'));
+              assertIsError(err);
+
+              return {
+                ...output,
+                success: false,
+                error: 'Unable to copy assets: ' + err.message,
+              };
+            }
+          }
+
+          if (i18n.shouldInline) {
+            const success = await i18nInlineEmittedFiles(
               context,
               emittedFiles,
               i18n,
@@ -109,18 +141,23 @@ export function execute(
               Array.from(outputPaths.values()),
               [],
               outputPath,
-              target <= ScriptTarget.ES5,
               options.i18nMissingTranslation,
             );
+            if (!success) {
+              return {
+                ...output,
+                success: false,
+              };
+            }
           }
 
           webpackStatsLogger(context.logger, webpackStats, config);
 
-          return { ...output, success };
+          return output;
         }),
       );
     }),
-    map((output) => {
+    concatMap(async (output) => {
       if (!output.success) {
         return output as ServerBuilderOutput;
       }
@@ -128,8 +165,13 @@ export function execute(
       return {
         ...output,
         baseOutputPath,
-        outputPath: baseOutputPath,
-        outputPaths: outputPaths || [baseOutputPath],
+        outputs: (outputPaths &&
+          [...outputPaths.entries()].map(([locale, path]) => ({
+            locale,
+            path,
+          }))) || {
+          path: baseOutputPath,
+        },
       } as ServerBuilderOutput;
     }),
   );
@@ -144,28 +186,93 @@ async function initialize(
 ): Promise<{
   config: webpack.Configuration;
   i18n: I18nOptions;
-  target: ScriptTarget;
+  projectRoot: string;
+  projectSourceRoot?: string;
 }> {
-  const originalOutputPath = options.outputPath;
-  const { config, i18n, target } = await generateI18nBrowserWebpackConfigFromContext(
-    {
-      ...options,
-      buildOptimizer: false,
-      aot: true,
-      platform: 'server',
-    } as NormalizedBrowserBuilderSchema,
-    context,
-    (wco) => [getCommonConfig(wco), getStylesConfig(wco)],
-  );
+  // Purge old build disk cache.
+  await purgeStaleBuildCache(context);
 
-  let transformedConfig;
-  if (webpackConfigurationTransform) {
-    transformedConfig = await webpackConfigurationTransform(config);
-  }
+  await checkTsConfigForPreserveWhitespacesSetting(context, options.tsConfig);
+
+  const browserslist = (await import('browserslist')).default;
+  const originalOutputPath = options.outputPath;
+  // Assets are processed directly by the builder except when watching
+  const adjustedOptions = options.watch ? options : { ...options, assets: [] };
+
+  const { config, projectRoot, projectSourceRoot, i18n } =
+    await generateI18nBrowserWebpackConfigFromContext(
+      {
+        ...adjustedOptions,
+        aot: true,
+        platform: 'server',
+      } as NormalizedBrowserBuilderSchema,
+      context,
+      (wco) => {
+        // We use the platform to determine the JavaScript syntax output.
+        wco.buildOptions.supportedBrowsers ??= [];
+        wco.buildOptions.supportedBrowsers.push(...browserslist('maintained node versions'));
+
+        return [getPlatformServerExportsConfig(wco), getCommonConfig(wco), getStylesConfig(wco)];
+      },
+    );
 
   if (options.deleteOutputPath) {
-    deleteOutputDir(context.workspaceRoot, originalOutputPath);
+    await deleteOutputDir(context.workspaceRoot, originalOutputPath);
   }
 
-  return { config: transformedConfig || config, i18n, target };
+  const transformedConfig = (await webpackConfigurationTransform?.(config)) ?? config;
+
+  return { config: transformedConfig, i18n, projectRoot, projectSourceRoot };
+}
+
+async function checkTsConfigForPreserveWhitespacesSetting(
+  context: BuilderContext,
+  tsConfigPath: string,
+): Promise<void> {
+  // We don't use the `readTsConfig` method on purpose here.
+  // To only catch cases were `preserveWhitespaces` is set directly in the `tsconfig.server.json`,
+  // which in the majority of cases will cause a mistmatch between client and server builds.
+  // Technically we should check if `tsconfig.server.json` and `tsconfig.app.json` values match.
+
+  // But:
+  // 1. It is not guaranteed that `tsconfig.app.json` is used to build the client side of this app.
+  // 2. There is no easy way to access the build build config from the server builder.
+  // 4. This will no longer be an issue with a single compilation model were the same tsconfig is used for both browser and server builds.
+  const content = await readFile(path.join(context.workspaceRoot, tsConfigPath), 'utf-8');
+  const { parse } = await import('jsonc-parser');
+  const tsConfig = parse(content, [], { allowTrailingComma: true });
+  if (tsConfig.angularCompilerOptions?.preserveWhitespaces !== undefined) {
+    context.logger.warn(
+      `"preserveWhitespaces" was set in "${tsConfigPath}". ` +
+        'Make sure that this setting is set consistently in both "tsconfig.server.json" for your server side ' +
+        'and "tsconfig.app.json" for your client side. A mismatched value will cause hydration to break.\n' +
+        'For more information see: https://angular.io/guide/hydration#preserve-whitespaces',
+    );
+  }
+}
+
+/**
+ * Add `@angular/platform-server` exports.
+ * This is needed so that DI tokens can be referenced and set at runtime outside of the bundle.
+ */
+function getPlatformServerExportsConfig(wco: BrowserWebpackConfigOptions): Partial<Configuration> {
+  // Add `@angular/platform-server` exports.
+  // This is needed so that DI tokens can be referenced and set at runtime outside of the bundle.
+
+  // Only add `@angular/platform-server` exports when it is installed.
+  // In some cases this builder is used when `@angular/platform-server` is not installed.
+  // Example: when using `@nguniversal/common/clover` which does not need `@angular/platform-server`.
+
+  return isPlatformServerInstalled(wco.root)
+    ? {
+        module: {
+          rules: [
+            {
+              loader: require.resolve('./platform-server-exports-loader'),
+              include: [path.resolve(wco.root, wco.buildOptions.main)],
+            },
+          ],
+        },
+      }
+    : {};
 }

@@ -12,11 +12,13 @@ import {
   createBuilder,
   targetFromTargetString,
 } from '@angular-devkit/architect';
-import { JsonObject, normalize, resolve } from '@angular-devkit/core';
+import { JsonObject } from '@angular-devkit/core';
 import * as fs from 'fs';
 import * as path from 'path';
+import Piscina from 'piscina';
 import { normalizeOptimization } from '../../utils';
-import { InlineCriticalCssProcessor } from '../../utils/index-file/inline-critical-css';
+import { assertIsError } from '../../utils/error';
+import type { InlineCriticalCssProcessor } from '../../utils/index-file/inline-critical-css';
 import { augmentAppWithServiceWorker } from '../../utils/service-worker';
 import { Spinner } from '../../utils/spinner';
 import { BrowserBuilderOutput } from '../browser';
@@ -41,10 +43,9 @@ async function _renderUniversal(
     browserBuilderName,
   );
 
-  // Initialize zone.js
+  // Locate zone.js to load in the render worker
   const root = context.workspaceRoot;
   const zonePackage = require.resolve('zone.js', { paths: [root] });
-  await import(zonePackage);
 
   const projectName = context.target && context.target.project;
   if (!projectName) {
@@ -52,74 +53,77 @@ async function _renderUniversal(
   }
 
   const projectMetadata = await context.getProjectMetadata(projectName);
-  const projectRoot = resolve(normalize(root), normalize((projectMetadata.root as string) || ''));
+  const projectRoot = path.join(root, (projectMetadata.root as string | undefined) ?? '');
 
   const { styles } = normalizeOptimization(browserOptions.optimization);
-  const inlineCriticalCssProcessor = styles.inlineCritical
-    ? new InlineCriticalCssProcessor({
-        minify: styles.minify,
-        deployUrl: browserOptions.deployUrl,
-      })
-    : undefined;
-
-  for (const outputPath of browserResult.outputPaths) {
-    const localeDirectory = path.relative(browserResult.baseOutputPath, outputPath);
-    const browserIndexOutputPath = path.join(outputPath, 'index.html');
-    const indexHtml = await fs.promises.readFile(browserIndexOutputPath, 'utf8');
-    const serverBundlePath = await _getServerModuleBundlePath(
-      options,
-      context,
-      serverResult,
-      localeDirectory,
+  let inlineCriticalCssProcessor: InlineCriticalCssProcessor | undefined;
+  if (styles.inlineCritical) {
+    const { InlineCriticalCssProcessor } = await import(
+      '../../utils/index-file/inline-critical-css'
     );
+    inlineCriticalCssProcessor = new InlineCriticalCssProcessor({
+      minify: styles.minify,
+      deployUrl: browserOptions.deployUrl,
+    });
+  }
 
-    const { AppServerModule, renderModule } = await import(serverBundlePath);
+  const renderWorker = new Piscina({
+    filename: require.resolve('./render-worker'),
+    maxThreads: 1,
+    workerData: { zonePackage },
+  });
 
-    const renderModuleFn: ((module: unknown, options: {}) => Promise<string>) | undefined =
-      renderModule;
-
-    if (!(renderModuleFn && AppServerModule)) {
-      throw new Error(
-        `renderModule method and/or AppServerModule were not exported from: ${serverBundlePath}.`,
+  try {
+    for (const { path: outputPath, baseHref } of browserResult.outputs) {
+      const localeDirectory = path.relative(browserResult.baseOutputPath, outputPath);
+      const browserIndexOutputPath = path.join(outputPath, 'index.html');
+      const indexHtml = await fs.promises.readFile(browserIndexOutputPath, 'utf8');
+      const serverBundlePath = await _getServerModuleBundlePath(
+        options,
+        context,
+        serverResult,
+        localeDirectory,
       );
-    }
 
-    // Load platform server module renderer
-    const renderOpts = {
-      document: indexHtml,
-      url: options.route,
-    };
-
-    let html = await renderModuleFn(AppServerModule, renderOpts);
-    // Overwrite the client index file.
-    const outputIndexPath = options.outputIndexPath
-      ? path.join(root, options.outputIndexPath)
-      : browserIndexOutputPath;
-
-    if (inlineCriticalCssProcessor) {
-      const { content, warnings, errors } = await inlineCriticalCssProcessor.process(html, {
-        outputPath,
+      let html: string = await renderWorker.run({
+        serverBundlePath,
+        document: indexHtml,
+        url: options.route,
       });
-      html = content;
 
-      if (warnings.length || errors.length) {
-        spinner.stop();
-        warnings.forEach((m) => context.logger.warn(m));
-        errors.forEach((m) => context.logger.error(m));
-        spinner.start();
+      // Overwrite the client index file.
+      const outputIndexPath = options.outputIndexPath
+        ? path.join(root, options.outputIndexPath)
+        : browserIndexOutputPath;
+
+      if (inlineCriticalCssProcessor) {
+        const { content, warnings, errors } = await inlineCriticalCssProcessor.process(html, {
+          outputPath,
+        });
+        html = content;
+
+        if (warnings.length || errors.length) {
+          spinner.stop();
+          warnings.forEach((m) => context.logger.warn(m));
+          errors.forEach((m) => context.logger.error(m));
+          spinner.start();
+        }
+      }
+
+      await fs.promises.writeFile(outputIndexPath, html);
+
+      if (browserOptions.serviceWorker) {
+        await augmentAppWithServiceWorker(
+          projectRoot,
+          root,
+          outputPath,
+          baseHref ?? '/',
+          browserOptions.ngswConfigPath,
+        );
       }
     }
-
-    await fs.promises.writeFile(outputIndexPath, html);
-
-    if (browserOptions.serviceWorker) {
-      await augmentAppWithServiceWorker(
-        projectRoot,
-        normalize(outputPath),
-        browserOptions.baseHref || '/',
-        browserOptions.ngswConfigPath,
-      );
-    }
+  } finally {
+    await renderWorker.destroy();
   }
 
   return browserResult;
@@ -198,6 +202,7 @@ async function _appShellBuilder(
     return result;
   } catch (err) {
     spinner?.fail('Application shell generation failed.');
+    assertIsError(err);
 
     return { success: false, error: err.message };
   } finally {

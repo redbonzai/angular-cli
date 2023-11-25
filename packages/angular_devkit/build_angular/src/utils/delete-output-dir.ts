@@ -6,34 +6,31 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import * as fs from 'fs';
-import { resolve } from 'path';
+import { readdir, rm } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 
 /**
  * Delete an output directory, but error out if it's the root of the project.
  */
-export function deleteOutputDir(root: string, outputPath: string): void {
+export async function deleteOutputDir(root: string, outputPath: string): Promise<void> {
   const resolvedOutputPath = resolve(root, outputPath);
   if (resolvedOutputPath === root) {
     throw new Error('Output path MUST not be project root directory!');
   }
 
-  // The below should be removed and replace with just `rmSync` when support for Node.Js 12 is removed.
-  const { rmSync, rmdirSync } = fs as typeof fs & {
-    rmSync?: (
-      path: fs.PathLike,
-      options?: {
-        force?: boolean;
-        maxRetries?: number;
-        recursive?: boolean;
-        retryDelay?: number;
-      },
-    ) => void;
-  };
+  // Avoid removing the actual directory to avoid errors in cases where the output
+  // directory is mounted or symlinked. Instead the contents are removed.
+  let entries;
+  try {
+    entries = await readdir(resolvedOutputPath);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
 
-  if (rmSync) {
-    rmSync(resolvedOutputPath, { force: true, recursive: true, maxRetries: 3 });
-  } else {
-    rmdirSync(resolvedOutputPath, { recursive: true, maxRetries: 3 });
+  for (const entry of entries) {
+    await rm(join(resolvedOutputPath, entry), { force: true, recursive: true, maxRetries: 3 });
   }
 }

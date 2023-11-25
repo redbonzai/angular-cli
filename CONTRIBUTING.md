@@ -60,7 +60,7 @@ Before you submit an issue, please search the issue tracker, maybe an issue for 
 We want to fix all the issues as soon as possible, but before fixing a bug we need to reproduce and confirm it. Having a reproducible scenario gives us wealth of important information without going back & forth to you with additional questions like:
 
 - version of Angular CLI used
-- `.angular-cli.json` or `angular.json` configuration
+- `angular.json` configuration
 - version of Angular DevKit used
 - 3rd-party libraries and their versions
 - and most importantly - a use-case that fails
@@ -84,7 +84,7 @@ Before you submit your Pull Request (PR) consider the following guidelines:
 * Make your changes in a new git branch:
 
      ```shell
-     git checkout -b my-fix-branch master
+     git checkout -b my-fix-branch main
      ```
 
 * Create your patch, **including appropriate test cases**.
@@ -106,19 +106,19 @@ Before you submit your Pull Request (PR) consider the following guidelines:
     git push origin my-fix-branch
     ```
 
-* In GitHub, send a pull request to `angular/angular-cli:master`.
+* In GitHub, send a pull request to `angular/angular-cli:main`.
 * If we suggest changes then:
   * Make the required updates.
   * Re-run the Angular DevKit test suites to ensure tests are still passing.
 * Once your PR is approved and you are done with any follow up changes:
-  * Rebase to the current master to pre-emptively address any merge conflicts.
+  * Rebase to the current main to pre-emptively address any merge conflicts.
 
     ```shell
-    git rebase master -i
+    git rebase upstream/main -i
     git push -f
     ```
   * Add the `action: merge` label and the correct
-[target label](https://github.com/angular/angular/blob/master/docs/TRIAGE_AND_LABELS.md#pr-target)
+[target label](https://github.com/angular/angular/blob/main/docs/TRIAGE_AND_LABELS.md#pr-target)
     (if PR author has the project collaborator status, or else the last reviewer
     should do this).
   * The current caretaker will merge the PR to the target branch(es) within 1-2
@@ -137,10 +137,10 @@ from the main (upstream) repository:
     git push origin --delete my-fix-branch
     ```
 
-* Check out the master branch:
+* Check out the main branch:
 
     ```shell
-    git checkout master -f
+    git checkout main -f
     ```
 
 * Delete the local branch:
@@ -149,10 +149,10 @@ from the main (upstream) repository:
     git branch -D my-fix-branch
     ```
 
-* Update your master with the latest upstream version:
+* Update your local `main` with the latest upstream version:
 
     ```shell
-    git pull --ff upstream master
+    git pull --ff upstream main
     ```
 
 ## <a name="rules"></a> Coding Rules
@@ -192,15 +192,15 @@ If the commit reverts a previous commit, it should begin with `revert: `, follow
 ### Type
 Must be one of the following:
 
-* **build**: Changes to local repository build system and tooling 
+* **build**: Changes to local repository build system and tooling
 * **ci**: Changes to CI configuration and CI specific tooling [2]
-* **docs**: Changes which exclusively affects documentation. 
+* **docs**: Changes which exclusively affects documentation.
 * **feat**: Creates a new feature [1]
 * **fix**: Fixes a previously discovered failure/bug [1]
 * **perf**: Improves performance without any change in functionality or API [1]
-* **refactor**: Refactor without any change in functionality or API (includes style changes) 
+* **refactor**: Refactor without any change in functionality or API (includes style changes)
 * **release**: A release point in the repository [2]
-* **test**: Improvements or corrections made to the project's test suite 
+* **test**: Improvements or corrections made to the project's test suite
 
 
 <sup>[1] This type MUST have a scope. See the next section for more information.</sup><br/>
@@ -212,12 +212,12 @@ The scope should be the name of the npm package affected as perceived by the per
 The following is the list of supported scopes:
 
 * **@angular/cli**
+* **@angular/create**
 * **@angular/pwa**
+* **@angular/ssr**
 * **@angular-devkit/architect**
 * **@angular-devkit/architect-cli**
-* **@angular-devkit/benchmark**
 * **@angular-devkit/build-angular**
-* **@angular-devkit/build-optimizer**
 * **@angular-devkit/build-webpack**
 * **@angular-devkit/core**
 * **@angular-devkit/schematics**
@@ -290,15 +290,15 @@ changes to be accepted, the CLA must be signed. It's a quick process, we promise
   [print, sign and one of scan+email, fax or mail the form][corporate-cla].
 
 
-[coc]: https://github.com/angular/code-of-conduct/blob/master/CODE_OF_CONDUCT.md
+[coc]: https://github.com/angular/code-of-conduct/blob/main/CODE_OF_CONDUCT.md
 [commit-message-format]: https://docs.google.com/document/d/1QrDFcIiPjSLDn3EL15IJygNPiHORgU1_OOAqWjiDU5Y/edit#
-[corporate-cla]: http://code.google.com/legal/corporate-cla-v1.0.html
-[dev-doc]: https://github.com/angular/angular-cli/blob/master/packages/angular/cli/README.md#development-hints-for-working-on-angular-cli
+[corporate-cla]: https://code.google.com/legal/corporate-cla-v1.0.html
+[dev-doc]: https://github.com/angular/angular-cli/blob/main/packages/angular/cli/README.md#development-hints-for-working-on-angular-cli
 [GitHub]: https://github.com/angular/angular-cli
 [gitter]: https://gitter.im/angular/angular-cli
-[individual-cla]: http://code.google.com/legal/individual-cla-v1.0.html
+[individual-cla]: https://code.google.com/legal/individual-cla-v1.0.html
 [js-style-guide]: https://google.github.io/styleguide/jsguide.html
-[stackoverflow]: http://stackoverflow.com/questions/tagged/angular-devkit
+[stackoverflow]: https://stackoverflow.com/questions/tagged/angular-devkit
 
 ## <a name="public-api"></a> Updating the Public API
 Our Public API surface is tracked using golden files.

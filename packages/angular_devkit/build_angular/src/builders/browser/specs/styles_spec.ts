@@ -12,8 +12,8 @@ import { dirname } from 'path';
 import { browserBuild, createArchitect, host } from '../../../testing/test-utils';
 
 describe('Browser Builder styles', () => {
-  const extensionsWithImportSupport = ['css', 'scss', 'less', 'styl'];
-  const extensionsWithVariableSupport = ['scss', 'less', 'styl'];
+  const extensionsWithImportSupport = ['css', 'scss', 'less'];
+  const extensionsWithVariableSupport = ['scss', 'less'];
   const imgSvg = `
     <svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
       <circle cx="50" cy="50" r="40" stroke="green" stroke-width="4" fill="yellow" />
@@ -93,18 +93,22 @@ describe('Browser Builder styles', () => {
         @Component({
           selector: 'app-root',
           templateUrl: './app.component.html',
-          styles: ['div { flex: 1 }'],
+          styles: ['div { mask-composite: add; }'],
         })
         export class AppComponent {
           title = 'app';
         }
       `,
-      '.browserslistrc': 'IE 10',
+      '.browserslistrc': `
+        Safari 15.4
+        Edge 104
+        Firefox 91
+      `,
     });
 
     const { files } = await browserBuild(architect, host, target, { aot: false });
 
-    expect(await files['main.js']).toContain('-ms-flex: 1;');
+    expect(await files['main.js']).toContain('-webkit-mask-composite');
   });
 
   it('supports autoprefixer with inline component styles in AOT mode', async () => {
@@ -115,18 +119,22 @@ describe('Browser Builder styles', () => {
         @Component({
           selector: 'app-root',
           templateUrl: './app.component.html',
-          styles: ['div { flex: 1 }'],
+          styles: ['div { mask-composite: add; }'],
         })
         export class AppComponent {
           title = 'app';
         }
       `,
-      '.browserslistrc': 'IE 10',
+      '.browserslistrc': `
+        Safari 15.4
+        Edge 104
+        Firefox 91
+      `,
     });
 
     const { files } = await browserBuild(architect, host, target, { aot: true });
 
-    expect(await files['main.js']).toContain('-ms-flex: 1;');
+    expect(await files['main.js']).toContain('-webkit-mask-composite');
   });
 
   extensionsWithImportSupport.forEach((ext) => {
@@ -165,6 +173,7 @@ describe('Browser Builder styles', () => {
       };
 
       const overrides = {
+        aot: true,
         sourceMap: true,
         styles: [`src/styles.${ext}`],
       };
@@ -186,11 +195,9 @@ describe('Browser Builder styles', () => {
     it(`supports material imports in ${ext} files`, async () => {
       host.writeMultipleFiles({
         [`src/styles.${ext}`]: `
-          @import "~@angular/material/prebuilt-themes/indigo-pink.css";
           @import "@angular/material/prebuilt-themes/indigo-pink.css";
         `,
         [`src/app/app.component.${ext}`]: `
-          @import "~@angular/material/prebuilt-themes/indigo-pink.css";
           @import "@angular/material/prebuilt-themes/indigo-pink.css";
         `,
       });
@@ -214,9 +221,6 @@ describe('Browser Builder styles', () => {
       if (ext === 'scss') {
         variableAssignment = '$primary-color:';
         variablereference = '$primary-color';
-      } else if (ext === 'styl') {
-        variableAssignment = '$primary-color =';
-        variablereference = '$primary-color';
       } else if (ext === 'less') {
         variableAssignment = '@primary-color:';
         variablereference = '@primary-color';
@@ -236,7 +240,7 @@ describe('Browser Builder styles', () => {
 
       const matches: { [path: string]: RegExp } = {
         'styles.css': /h1\s*{\s*color: #f00;\s*}/,
-        'main.js': /h2.*{.*color: #f00;.*}/,
+        'main.js': /h2\s*{\s*color: #f00;\s*}/,
       };
 
       host.replaceInFile(
@@ -253,28 +257,23 @@ describe('Browser Builder styles', () => {
       };
 
       const { files } = await browserBuild(architect, host, target, overrides);
-      for (const fileName of Object.keys(matches)) {
-        expect(await files[fileName]).toMatch(matches[fileName]);
+      for (const [fileName, match] of Object.entries(matches)) {
+        expect(await files[fileName]).toMatch(match);
       }
     });
   });
 
   it(`supports font-awesome imports`, async () => {
+    // font-awesome mock to avoid having an extra dependency.
     host.writeMultipleFiles({
-      'src/styles.scss': `
-        @import "font-awesome/scss/font-awesome";
+      'node_modules/font-awesome/scss/font-awesome.scss': `
+        * { color: red }
       `,
     });
 
-    const overrides = { styles: [`src/styles.scss`] };
-    await browserBuild(architect, host, target, overrides);
-  });
-
-  it(`supports font-awesome imports (tilde)`, async () => {
     host.writeMultipleFiles({
       'src/styles.scss': `
-        $fa-font-path: "~font-awesome/fonts";
-        @import "~font-awesome/scss/font-awesome";
+        @import "font-awesome/scss/font-awesome";
       `,
     });
 
@@ -288,23 +287,30 @@ describe('Browser Builder styles', () => {
         @import url(imported-styles.css);
         /* normal-comment */
         /*! important-comment */
-        div { flex: 1 }`,
+        div { mask-composite: add; }`,
       'src/imported-styles.css': tags.stripIndents`
         /* normal-comment */
         /*! important-comment */
-        section { flex: 1 }`,
-      '.browserslistrc': 'IE 10',
+        section { mask-composite: add; }`,
+      '.browserslistrc': `
+        Safari 15.4
+        Edge 104
+        Firefox 91
+      `,
     });
 
     const overrides = { optimization: false };
     const { files } = await browserBuild(architect, host, target, overrides);
-    expect(await files['styles.css']).toContain(tags.stripIndents`
+    const content = await files['styles.css'];
+    expect(content).toContain(tags.stripIndents`
       /* normal-comment */
       /*! important-comment */
-      section { -ms-flex: 1; flex: 1 }
+      section { -webkit-mask-composite: source-over; mask-composite: add; }`);
+    // Check separately because Webpack may add source file comments inbetween the rules
+    expect(content).toContain(tags.stripIndents`
       /* normal-comment */
       /*! important-comment */
-      div { -ms-flex: 1; flex: 1 }`);
+      div { -webkit-mask-composite: source-over; mask-composite: add; }`);
   });
 
   it(`minimizes css`, async () => {
@@ -318,24 +324,6 @@ describe('Browser Builder styles', () => {
     const overrides = { optimization: true };
     const { files } = await browserBuild(architect, host, target, overrides);
     expect(await files['styles.css']).toContain('/*! important-comment */');
-  });
-
-  it('supports autoprefixer grid comments in SCSS with optimization true', async () => {
-    host.writeMultipleFiles({
-      'src/styles.scss': tags.stripIndents`
-        /* autoprefixer grid: autoplace */
-        .css-grid-container {
-          display: grid;
-          row-gap: 10px;
-          grid-template-columns: 100px;
-        }
-      `,
-      '.browserslistrc': 'IE 10',
-    });
-
-    const overrides = { optimization: true, styles: ['src/styles.scss'] };
-    const { files } = await browserBuild(architect, host, target, overrides);
-    expect(await files['styles.css']).toContain('-ms-grid-columns:100px;');
   });
 
   // TODO: consider making this a unit test in the url processing plugins.
@@ -513,6 +501,8 @@ describe('Browser Builder styles', () => {
 
     const run2 = await architect.scheduleTarget(target, overrides);
     await expectAsync(run2.result).toBeResolvedTo(jasmine.objectContaining({ success: false }));
+    await run2.stop();
+    await run.stop();
   });
 
   it('supports Protocol-relative Url', async () => {
@@ -649,10 +639,62 @@ describe('Browser Builder styles', () => {
       'src/styles.css': `
         div { box-shadow: 0 3px 10px, rgba(0, 0, 0, 0.15); }
       `,
-      '.browserslistrc': 'edge 17',
+      '.browserslistrc': `edge 18`,
     });
 
     result = await browserBuild(architect, host, target, { optimization: true });
+
     expect(await result.files['styles.css']).toContain('rgba(0,0,0,.15)');
+  });
+
+  it('works when using the same css file in `styles` and `stylesUrl`', async () => {
+    host.writeMultipleFiles({
+      'src/styles.css': `
+        div { color: red }
+      `,
+      './src/app/app.component.ts': `
+        import { Component } from '@angular/core';
+
+        @Component({
+          selector: 'app-root',
+          templateUrl: './app.component.html',
+          styleUrls: ['../styles.css']
+        })
+        export class AppComponent {
+          title = 'app';
+        }
+      `,
+    });
+
+    await browserBuild(architect, host, target, { styles: ['src/styles.css'] });
+  });
+
+  it('works when Data URI has escaped quote', async () => {
+    const svgData = `"data:image/svg+xml;charset=utf-8,<svg width=/"16/" height=/"15/"></svg>"`;
+
+    host.writeMultipleFiles({
+      'src/styles.css': `
+        div { background: url(${svgData}) }
+      `,
+    });
+
+    const result = await browserBuild(architect, host, target, { styles: ['src/styles.css'] });
+    expect(await result.files['styles.css']).toContain(svgData);
+  });
+
+  it('works when Data URI has parenthesis', async () => {
+    const svgData =
+      '"data:image/svg+xml;charset=utf-8,<svg>' +
+      `<mask id='clip'><g><circle mask='url(%23clip)' cx='11.5' cy='11.5' r='9.25'/><use xlink:href='#text' mask='url(#clip)'/></g>` +
+      '</svg>"';
+
+    host.writeMultipleFiles({
+      'src/styles.css': `
+        div { background: url(${svgData}) }
+      `,
+    });
+
+    const result = await browserBuild(architect, host, target, { styles: ['src/styles.css'] });
+    expect(await result.files['styles.css']).toContain(svgData);
   });
 });

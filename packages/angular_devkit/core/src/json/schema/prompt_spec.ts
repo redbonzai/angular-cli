@@ -7,11 +7,10 @@
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { map, mergeMap } from 'rxjs/operators';
 import { CoreSchemaRegistry } from './registry';
 
 describe('Prompt Provider', () => {
-  it('sets properties with answer', (done) => {
+  it('sets properties with answer', async () => {
     const registry = new CoreSchemaRegistry();
     const data: any = {};
 
@@ -19,26 +18,20 @@ describe('Prompt Provider', () => {
       return { [definitions[0].id]: true };
     });
 
-    registry
-      .compile({
-        properties: {
-          test: {
-            type: 'boolean',
-            'x-prompt': 'test-message',
-          },
+    const validator = await registry.compile({
+      properties: {
+        test: {
+          type: 'boolean',
+          'x-prompt': 'test-message',
         },
-      })
-      .pipe(
-        mergeMap((validator) => validator(data)),
-        map(() => {
-          expect(data.test).toBe(true);
-        }),
-      )
-      .toPromise()
-      .then(done, done.fail);
+      },
+    });
+
+    await validator(data);
+    expect(data.test).toBe(true);
   });
 
-  it('supports mixed schema references', (done) => {
+  it('supports mixed schema references', async () => {
     const registry = new CoreSchemaRegistry();
     const data: any = {};
 
@@ -50,58 +43,52 @@ describe('Prompt Provider', () => {
       };
     });
 
-    registry
-      .compile({
-        properties: {
-          bool: {
-            $ref: '#/definitions/example',
+    const validator = await registry.compile({
+      properties: {
+        bool: {
+          $ref: '#/definitions/example',
+        },
+        test: {
+          type: 'string',
+          enum: ['one', 'two', 'three'],
+          'x-prompt': {
+            type: 'list',
+            'message': 'other-message',
           },
-          test: {
-            type: 'string',
-            enum: ['one', 'two', 'three'],
-            'x-prompt': {
-              type: 'list',
-              'message': 'other-message',
-            },
-          },
-          obj: {
-            properties: {
-              deep: {
-                properties: {
-                  three: {
-                    $ref: '#/definitions/test3',
-                  },
+        },
+        obj: {
+          properties: {
+            deep: {
+              properties: {
+                three: {
+                  $ref: '#/definitions/test3',
                 },
               },
             },
           },
         },
-        definitions: {
-          example: {
-            type: 'boolean',
-            'x-prompt': 'example-message',
-          },
-          test3: {
-            type: 'string',
-            'x-prompt': 'test3-message',
-          },
+      },
+      definitions: {
+        example: {
+          type: 'boolean',
+          'x-prompt': 'example-message',
         },
-      })
-      .pipe(
-        mergeMap((validator) => validator(data)),
-        map((result) => {
-          expect(result.success).toBe(true);
-          expect(data.bool).toBe(true);
-          expect(data.test).toBe('two');
-          expect(data.obj.deep.three).toEqual('test3-answer');
-        }),
-      )
-      .toPromise()
-      .then(done, done.fail);
+        test3: {
+          type: 'string',
+          'x-prompt': 'test3-message',
+        },
+      },
+    });
+
+    const result = await validator(data);
+    expect(result.success).toBe(true);
+    expect(data.bool).toBe(true);
+    expect(data.test).toBe('two');
+    expect(data.obj.deep.three).toEqual('test3-answer');
   });
 
   describe('with shorthand', () => {
-    it('supports message value', (done) => {
+    it('supports message value', async () => {
       const registry = new CoreSchemaRegistry();
       const data: any = {};
 
@@ -112,21 +99,19 @@ describe('Prompt Provider', () => {
         return {};
       });
 
-      registry
-        .compile({
-          properties: {
-            test: {
-              type: 'string',
-              'x-prompt': 'test-message',
-            },
+      const validator = await registry.compile({
+        properties: {
+          test: {
+            type: 'string',
+            'x-prompt': 'test-message',
           },
-        })
-        .pipe(mergeMap((validator) => validator(data)))
-        .toPromise()
-        .then(done, done.fail);
+        },
+      });
+
+      await validator(data);
     });
 
-    it('analyzes enums', (done) => {
+    it('analyzes enums', async () => {
       const registry = new CoreSchemaRegistry();
       const data: any = {};
 
@@ -138,22 +123,19 @@ describe('Prompt Provider', () => {
         return {};
       });
 
-      registry
-        .compile({
-          properties: {
-            test: {
-              type: 'string',
-              enum: ['one', 'two', 'three'],
-              'x-prompt': 'test-message',
-            },
+      const validator = await registry.compile({
+        properties: {
+          test: {
+            type: 'string',
+            enum: ['one', 'two', 'three'],
+            'x-prompt': 'test-message',
           },
-        })
-        .pipe(mergeMap((validator) => validator(data)))
-        .toPromise()
-        .then(done, done.fail);
+        },
+      });
+      await validator(data);
     });
 
-    it('analyzes boolean properties', (done) => {
+    it('analyzes boolean properties', async () => {
       const registry = new CoreSchemaRegistry();
       const data: any = {};
 
@@ -165,23 +147,20 @@ describe('Prompt Provider', () => {
         return {};
       });
 
-      registry
-        .compile({
-          properties: {
-            test: {
-              type: 'boolean',
-              'x-prompt': 'test-message',
-            },
+      const validator = await registry.compile({
+        properties: {
+          test: {
+            type: 'boolean',
+            'x-prompt': 'test-message',
           },
-        })
-        .pipe(mergeMap((validator) => validator(data)))
-        .toPromise()
-        .then(done, done.fail);
+        },
+      });
+      await validator(data);
     });
   });
 
   describe('with longhand', () => {
-    it('supports message option', (done) => {
+    it('supports message option', async () => {
       const registry = new CoreSchemaRegistry();
       const data: any = {};
 
@@ -192,23 +171,20 @@ describe('Prompt Provider', () => {
         return {};
       });
 
-      registry
-        .compile({
-          properties: {
-            test: {
-              type: 'string',
-              'x-prompt': {
-                'message': 'test-message',
-              },
+      const validator = await registry.compile({
+        properties: {
+          test: {
+            type: 'string',
+            'x-prompt': {
+              'message': 'test-message',
             },
           },
-        })
-        .pipe(mergeMap((validator) => validator(data)))
-        .toPromise()
-        .then(done, done.fail);
+        },
+      });
+      await validator(data);
     });
 
-    it('analyzes enums WITH explicit list type', (done) => {
+    it('analyzes enums WITH explicit list type', async () => {
       const registry = new CoreSchemaRegistry();
       const data: any = {};
 
@@ -220,25 +196,22 @@ describe('Prompt Provider', () => {
         return { [definitions[0].id]: 'one' };
       });
 
-      registry
-        .compile({
-          properties: {
-            test: {
-              type: 'string',
-              enum: ['one', 'two', 'three'],
-              'x-prompt': {
-                'type': 'list',
-                'message': 'test-message',
-              },
+      const validator = await registry.compile({
+        properties: {
+          test: {
+            type: 'string',
+            enum: ['one', 'two', 'three'],
+            'x-prompt': {
+              'type': 'list',
+              'message': 'test-message',
             },
           },
-        })
-        .pipe(mergeMap((validator) => validator(data)))
-        .toPromise()
-        .then(done, done.fail);
+        },
+      });
+      await validator(data);
     });
 
-    it('analyzes list with true multiselect option and object items', (done) => {
+    it('analyzes list with true multiselect option and object items', async () => {
       const registry = new CoreSchemaRegistry();
       const data: any = {};
 
@@ -254,29 +227,26 @@ describe('Prompt Provider', () => {
         return { [definitions[0].id]: { 'value': 'one', 'label': 'one' } };
       });
 
-      registry
-        .compile({
-          properties: {
-            test: {
-              type: 'array',
-              'x-prompt': {
-                'type': 'list',
-                'multiselect': true,
-                'items': [
-                  { 'value': 'one', 'label': 'one' },
-                  { 'value': 'two', 'label': 'two' },
-                ],
-                'message': 'test-message',
-              },
+      const validator = await registry.compile({
+        properties: {
+          test: {
+            type: 'array',
+            'x-prompt': {
+              'type': 'list',
+              'multiselect': true,
+              'items': [
+                { 'value': 'one', 'label': 'one' },
+                { 'value': 'two', 'label': 'two' },
+              ],
+              'message': 'test-message',
             },
           },
-        })
-        .pipe(mergeMap((validator) => validator(data)))
-        .toPromise()
-        .then(done, done.fail);
+        },
+      });
+      await validator(data);
     });
 
-    it('analyzes list with false multiselect option and object items', (done) => {
+    it('analyzes list with false multiselect option and object items', async () => {
       const registry = new CoreSchemaRegistry();
       const data: any = {};
 
@@ -292,29 +262,26 @@ describe('Prompt Provider', () => {
         return { [definitions[0].id]: { 'value': 'one', 'label': 'one' } };
       });
 
-      registry
-        .compile({
-          properties: {
-            test: {
-              type: 'array',
-              'x-prompt': {
-                'type': 'list',
-                'multiselect': false,
-                'items': [
-                  { 'value': 'one', 'label': 'one' },
-                  { 'value': 'two', 'label': 'two' },
-                ],
-                'message': 'test-message',
-              },
+      const validator = await registry.compile({
+        properties: {
+          test: {
+            type: 'array',
+            'x-prompt': {
+              'type': 'list',
+              'multiselect': false,
+              'items': [
+                { 'value': 'one', 'label': 'one' },
+                { 'value': 'two', 'label': 'two' },
+              ],
+              'message': 'test-message',
             },
           },
-        })
-        .pipe(mergeMap((validator) => validator(data)))
-        .toPromise()
-        .then(done, done.fail);
+        },
+      });
+      await validator(data);
     });
 
-    it('analyzes list without multiselect option and object items', (done) => {
+    it('analyzes list without multiselect option and object items', async () => {
       const registry = new CoreSchemaRegistry();
       const data: any = {};
 
@@ -330,28 +297,25 @@ describe('Prompt Provider', () => {
         return { [definitions[0].id]: { 'value': 'two', 'label': 'two' } };
       });
 
-      registry
-        .compile({
-          properties: {
-            test: {
-              type: 'array',
-              'x-prompt': {
-                'type': 'list',
-                'items': [
-                  { 'value': 'one', 'label': 'one' },
-                  { 'value': 'two', 'label': 'two' },
-                ],
-                'message': 'test-message',
-              },
+      const validator = await registry.compile({
+        properties: {
+          test: {
+            type: 'array',
+            'x-prompt': {
+              'type': 'list',
+              'items': [
+                { 'value': 'one', 'label': 'one' },
+                { 'value': 'two', 'label': 'two' },
+              ],
+              'message': 'test-message',
             },
           },
-        })
-        .pipe(mergeMap((validator) => validator(data)))
-        .toPromise()
-        .then(done, done.fail);
+        },
+      });
+      await validator(data);
     });
 
-    it('analyzes enums WITHOUT explicit list type', (done) => {
+    it('analyzes enums WITHOUT explicit list type', async () => {
       const registry = new CoreSchemaRegistry();
       const data: any = {};
 
@@ -363,25 +327,21 @@ describe('Prompt Provider', () => {
 
         return {};
       });
-
-      registry
-        .compile({
-          properties: {
-            test: {
-              type: 'string',
-              enum: ['one', 'two', 'three'],
-              'x-prompt': {
-                'message': 'test-message',
-              },
+      const validator = await registry.compile({
+        properties: {
+          test: {
+            type: 'string',
+            enum: ['one', 'two', 'three'],
+            'x-prompt': {
+              'message': 'test-message',
             },
           },
-        })
-        .pipe(mergeMap((validator) => validator(data)))
-        .toPromise()
-        .then(done, done.fail);
+        },
+      });
+      await validator(data);
     });
 
-    it('analyzes enums WITHOUT explicit list type and multiselect', (done) => {
+    it('analyzes enums WITHOUT explicit list type and multiselect', async () => {
       const registry = new CoreSchemaRegistry();
       const data: any = {};
 
@@ -394,24 +354,21 @@ describe('Prompt Provider', () => {
         return {};
       });
 
-      registry
-        .compile({
-          properties: {
-            test: {
-              type: 'array',
-              items: {
-                enum: ['one', 'two', 'three'],
-              },
-              'x-prompt': 'test-message',
+      const validator = await registry.compile({
+        properties: {
+          test: {
+            type: 'array',
+            items: {
+              enum: ['one', 'two', 'three'],
             },
+            'x-prompt': 'test-message',
           },
-        })
-        .pipe(mergeMap((validator) => validator(data)))
-        .toPromise()
-        .then(done, done.fail);
+        },
+      });
+      await validator(data);
     });
 
-    it('analyzes boolean properties', (done) => {
+    it('analyzes boolean properties', async () => {
       const registry = new CoreSchemaRegistry();
       const data: any = {};
 
@@ -423,23 +380,20 @@ describe('Prompt Provider', () => {
         return {};
       });
 
-      registry
-        .compile({
-          properties: {
-            test: {
-              type: 'boolean',
-              'x-prompt': {
-                'message': 'test-message',
-              },
+      const validator = await registry.compile({
+        properties: {
+          test: {
+            type: 'boolean',
+            'x-prompt': {
+              'message': 'test-message',
             },
           },
-        })
-        .pipe(mergeMap((validator) => validator(data)))
-        .toPromise()
-        .then(done, done.fail);
+        },
+      });
+      await validator(data);
     });
 
-    it('allows prompt type override', (done) => {
+    it('allows prompt type override', async () => {
       const registry = new CoreSchemaRegistry();
       const data: any = {};
 
@@ -451,21 +405,18 @@ describe('Prompt Provider', () => {
         return {};
       });
 
-      registry
-        .compile({
-          properties: {
-            test: {
-              type: 'boolean',
-              'x-prompt': {
-                'type': 'input',
-                'message': 'test-message',
-              },
+      const validator = await registry.compile({
+        properties: {
+          test: {
+            type: 'boolean',
+            'x-prompt': {
+              'type': 'input',
+              'message': 'test-message',
             },
           },
-        })
-        .pipe(mergeMap((validator) => validator(data)))
-        .toPromise()
-        .then(done, done.fail);
+        },
+      });
+      await validator(data);
     });
   });
 });

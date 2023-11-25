@@ -1,31 +1,20 @@
-import { request } from '../../../utils/http';
-import { killAllProcesses } from '../../../utils/process';
+import * as assert from 'assert';
 import { ngServe } from '../../../utils/project';
 
-export default function () {
+export default async function () {
   // TODO(architect): Delete this test. It is now in devkit/build-angular.
 
+  const port = await ngServe('--serve-path', 'test/');
+
   return Promise.resolve()
-    .then(() => ngServe('--serve-path', 'test/'))
-    .then(() => request('http://localhost:4200/test'))
-    .then(body => {
-      if (!body.match(/<app-root><\/app-root>/)) {
-        throw new Error('Response does not match expected value.');
-      }
+    .then(() => fetch(`http://localhost:${port}/test`, { headers: { 'Accept': 'text/html' } }))
+    .then(async (response) => {
+      assert.strictEqual(response.status, 200);
+      assert.match(await response.text(), /<app-root><\/app-root>/);
     })
-    .then(() => request('http://localhost:4200/test/abc'))
-    .then(body => {
-      if (!body.match(/<app-root><\/app-root>/)) {
-        throw new Error('Response does not match expected value.');
-      }
-    })
-    .then(() => killAllProcesses(), (err) => { killAllProcesses(); throw err; })
-    // .then(() => ngServe('--base-href', 'test/'))
-    // .then(() => request('http://localhost:4200/test'))
-    // .then(body => {
-    //   if (!body.match(/<app-root><\/app-root>/)) {
-    //     throw new Error('Response does not match expected value.');
-    //   }
-    // })
-    // .then(() => killAllProcesses(), (err) => { killAllProcesses(); throw err; });
+    .then(() => fetch(`http://localhost:${port}/test/abc`, { headers: { 'Accept': 'text/html' } }))
+    .then(async (response) => {
+      assert.strictEqual(response.status, 200);
+      assert.match(await response.text(), /<app-root><\/app-root>/);
+    });
 }

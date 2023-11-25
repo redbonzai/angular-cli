@@ -6,8 +6,8 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { prompt } from 'inquirer';
 import * as net from 'net';
+import { loadEsmModule } from './load-esm';
 import { isTTY } from './tty';
 
 function createInUseError(port: number): Error {
@@ -36,15 +36,19 @@ export async function checkPort(port: number, host: string): Promise<number> {
           return;
         }
 
-        prompt({
-          type: 'confirm',
-          name: 'useDifferent',
-          message: `Port ${port} is already in use.\nWould you like to use a different port?`,
-          default: true,
-        }).then(
-          (answers) => (answers.useDifferent ? resolve(0) : reject(createInUseError(port))),
-          () => reject(createInUseError(port)),
-        );
+        loadEsmModule<typeof import('inquirer')>('inquirer')
+          .then(({ default: { prompt } }) =>
+            prompt({
+              type: 'confirm',
+              name: 'useDifferent',
+              message: `Port ${port} is already in use.\nWould you like to use a different port?`,
+              default: true,
+            }),
+          )
+          .then(
+            (answers) => (answers.useDifferent ? resolve(0) : reject(createInUseError(port))),
+            () => reject(createInUseError(port)),
+          );
       })
       .once('listening', () => {
         server.close();

@@ -66,6 +66,7 @@ describe('@ngtools/webpack transformers', () => {
       `,
       'service.ts': `
         export class Service { }
+        export class Service2 { }
       `,
       'type.ts': `
         export interface OnChanges {
@@ -385,6 +386,45 @@ describe('@ngtools/webpack transformers', () => {
 
         expect(tags.oneLine`${result}`).toEqual(tags.oneLine`${output}`);
       });
+
+      it('should remove ctor parameter type reference and unused named import from same declaration', () => {
+        const input = tags.stripIndent`
+          import { Decorator } from './decorator';
+          import { Service, Service2 as ServiceUnused } from './service';
+
+          @Decorator()
+          export class Foo {
+            constructor(param: Service) {
+            }
+          }
+
+          ${dummyNode}
+        `;
+
+        const output = tags.stripIndent`
+          import { __decorate } from "tslib";
+          import { Decorator } from './decorator';
+
+          let Foo = class Foo { constructor(param) { } };
+          Foo = __decorate([ Decorator() ], Foo);
+          export { Foo };
+        `;
+
+        const { program, compilerHost } = createTypescriptContext(
+          input,
+          additionalFiles,
+          true,
+          extraCompilerOptions,
+        );
+        const result = transformTypescript(
+          undefined,
+          [transformer(program)],
+          program,
+          compilerHost,
+        );
+
+        expect(tags.oneLine`${result}`).toEqual(tags.oneLine`${output}`);
+      });
     });
 
     it('keeps jsxFactory imports when configured', () => {
@@ -439,6 +479,44 @@ describe('@ngtools/webpack transformers', () => {
         emitDecoratorMetadata: true,
         experimentalDecorators: true,
       };
+
+      it('should elide type only named imports', () => {
+        const input = tags.stripIndent`
+          import { Decorator } from './decorator';
+          import { type OnChanges, type SimpleChanges } from './type';
+
+          @Decorator()
+          export class Foo implements OnChanges {
+            ngOnChanges(changes: SimpleChanges) { }
+          }
+
+          ${dummyNode}
+        `;
+
+        const output = tags.stripIndent`
+          import { __decorate } from "tslib";
+          import { Decorator } from './decorator';
+
+          let Foo = class Foo { ngOnChanges(changes) { } };
+          Foo = __decorate([ Decorator() ], Foo);
+          export { Foo };
+        `;
+
+        const { program, compilerHost } = createTypescriptContext(
+          input,
+          additionalFiles,
+          true,
+          extraCompilerOptions,
+        );
+        const result = transformTypescript(
+          undefined,
+          [transformer(program)],
+          program,
+          compilerHost,
+        );
+
+        expect(tags.oneLine`${result}`).toEqual(tags.oneLine`${output}`);
+      });
 
       it('should not remove ctor parameter type reference', () => {
         const input = tags.stripIndent`
@@ -735,13 +813,13 @@ describe('@ngtools/webpack transformers', () => {
         ): ts.Transformer<ts.SourceFile> => {
           const visit: ts.Visitor = (node) => {
             if (ts.isShorthandPropertyAssignment(node)) {
-              return ts.createPropertyAssignment(node.name, node.name);
+              return ts.factory.createPropertyAssignment(node.name, node.name);
             }
 
             return ts.visitEachChild(node, (child) => visit(child), context);
           };
 
-          return (node) => ts.visitNode(node, visit);
+          return (node) => ts.visitNode(node, visit) as ts.SourceFile;
         };
 
         it('should not elide import when ShorthandPropertyAssignment is transformed to PropertyAssignment', () => {

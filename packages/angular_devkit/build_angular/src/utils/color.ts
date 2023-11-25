@@ -9,8 +9,6 @@
 import * as ansiColors from 'ansi-colors';
 import { WriteStream } from 'tty';
 
-type AnsiColors = typeof ansiColors;
-
 function supportColor(): boolean {
   if (process.env.FORCE_COLOR !== undefined) {
     // 2 colors: FORCE_COLOR = 0 (Disables colors), depth 1
@@ -45,8 +43,7 @@ export function removeColor(text: string): string {
 }
 
 // Create a separate instance to prevent unintended global changes to the color configuration
-// Create function is not defined in the typings. See: https://github.com/doowb/ansi-colors/pull/44
-const colors = (ansiColors as AnsiColors & { create: () => AnsiColors }).create();
+const colors = ansiColors.create();
 colors.enabled = supportColor();
 
 export { colors };

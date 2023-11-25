@@ -9,6 +9,7 @@
 import { Architect } from '@angular-devkit/architect';
 import { BrowserBuilderOutput } from '@angular-devkit/build-angular';
 import { join, normalize } from '@angular-devkit/core';
+import { lastValueFrom } from 'rxjs';
 import { browserBuild, createArchitect, host } from '../../../testing/test-utils';
 
 describe('Browser Builder build optimizer', () => {
@@ -30,11 +31,8 @@ describe('Browser Builder build optimizer', () => {
   it('fails if AOT is disabled', async () => {
     const overrides = { aot: false, buildOptimizer: true };
     const run = await architect.scheduleTarget(targetSpec, overrides);
-
-    try {
-      await run.result;
-      expect('THE ABOVE LINE SHOULD THROW').toBe('');
-    } catch {}
+    await expectAsync(run.result).toBeRejectedWithError();
+    await run.stop();
   });
 
   it('reduces bundle size', async () => {
@@ -46,7 +44,9 @@ describe('Browser Builder build optimizer', () => {
 
     expect(output.success).toBe(true);
 
-    const noBoStats = await host.stat(join(normalize(output.outputPath), 'main.js')).toPromise();
+    const noBoStats = await lastValueFrom(
+      host.stat(join(normalize(output.outputs[0].path), 'main.js')),
+    );
     if (!noBoStats) {
       throw new Error('Main file has no stats');
     }
@@ -57,7 +57,9 @@ describe('Browser Builder build optimizer', () => {
     const boOutput = (await run.result) as BrowserBuilderOutput;
     expect(boOutput.success).toBe(true);
 
-    const boStats = await host.stat(join(normalize(output.outputPath), 'main.js')).toPromise();
+    const boStats = await await lastValueFrom(
+      host.stat(join(normalize(output.outputs[0].path), 'main.js')),
+    );
     if (!boStats) {
       throw new Error('Main file has no stats');
     }

@@ -8,7 +8,7 @@
 
 import { Architect } from '@angular-devkit/architect';
 import { join, logging, normalize, virtualFs } from '@angular-devkit/core';
-import { debounceTime, take, takeWhile, tap } from 'rxjs/operators';
+import { debounceTime, take, takeWhile, tap, timeout } from 'rxjs';
 import {
   createArchitect,
   host,
@@ -16,6 +16,7 @@ import {
   lazyModuleFnImport,
   outputPath,
 } from '../../../testing/test-utils';
+import { BUILD_TIMEOUT } from '../index';
 
 describe('Browser Builder rebuilds', () => {
   const target = { project: 'app', target: 'build' };
@@ -54,15 +55,8 @@ describe('Browser Builder rebuilds', () => {
         export let X = '$$_E2E_GOLDEN_VALUE_2';
       `,
       'src/main.ts': `
-        import { enableProdMode } from '@angular/core';
         import { platformBrowserDynamic } from '@angular/platform-browser-dynamic';
-
         import { AppModule } from './app/app.module';
-        import { environment } from './environments/environment';
-
-        if (environment.production) {
-          enableProdMode();
-        }
 
         platformBrowserDynamic().bootstrapModule(AppModule);
 
@@ -78,9 +72,10 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
+        timeout(BUILD_TIMEOUT),
         debounceTime(rebuildDebounceTime),
         tap((result) => {
-          expect(result.success).toBe(true, 'build should succeed');
+          expect(result.success).toBeTrue();
           const hasLazyChunk = host
             .scopedSync()
             .exists(normalize('dist/src_app_lazy_lazy_module_ts.js'));
@@ -131,6 +126,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
+        timeout(BUILD_TIMEOUT),
         debounceTime(rebuildDebounceTime),
         tap((buildEvent) => expect(buildEvent.success).toBe(true)),
         tap(() => host.appendToFile('src/app/app.component.css', ':host { color: blue; }')),
@@ -164,6 +160,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides, { logger });
     await run.output
       .pipe(
+        timeout(BUILD_TIMEOUT),
         debounceTime(rebuildDebounceTime),
         tap((buildEvent) => {
           buildNumber += 1;
@@ -217,12 +214,14 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
+        timeout(BUILD_TIMEOUT),
         debounceTime(rebuildDebounceTime),
         tap((buildEvent) => expect(buildEvent.success).toBe(true)),
         tap(() => host.writeMultipleFiles({ 'src/type.ts': `export type MyType = string;` })),
         take(2),
       )
       .toPromise();
+    await run.stop();
   });
 
   it('rebuilds on transitive type-only file changes', async () => {
@@ -250,6 +249,7 @@ describe('Browser Builder rebuilds', () => {
     let buildNumber = 0;
     await run.output
       .pipe(
+        timeout(BUILD_TIMEOUT),
         debounceTime(rebuildDebounceTime),
         tap((buildEvent) => expect(buildEvent.success).toBe(true)),
         tap(() => {
@@ -266,6 +266,8 @@ describe('Browser Builder rebuilds', () => {
         take(5),
       )
       .toPromise();
+
+    await run.stop();
   });
 
   it('rebuilds on transitive non node package DTS file changes', async () => {
@@ -293,6 +295,7 @@ describe('Browser Builder rebuilds', () => {
     let buildNumber = 0;
     await run.output
       .pipe(
+        timeout(BUILD_TIMEOUT),
         debounceTime(rebuildDebounceTime),
         tap((buildEvent) => expect(buildEvent.success).toBe(true)),
         tap(() => {
@@ -304,6 +307,7 @@ describe('Browser Builder rebuilds', () => {
         take(2),
       )
       .toPromise();
+    await run.stop();
   });
 
   it('rebuilds after errors in JIT', async () => {
@@ -318,6 +322,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
+        timeout(BUILD_TIMEOUT),
         debounceTime(rebuildDebounceTime),
         tap((buildEvent) => {
           buildNumber++;
@@ -363,6 +368,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides, { logger });
     await run.output
       .pipe(
+        timeout(BUILD_TIMEOUT),
         debounceTime(rebuildDebounceTime),
         tap((buildEvent) => {
           buildNumber += 1;
@@ -461,6 +467,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
+        timeout(BUILD_TIMEOUT),
         debounceTime(rebuildDebounceTime),
         tap((buildEvent) => {
           buildNumber += 1;
@@ -551,6 +558,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
+        timeout(BUILD_TIMEOUT),
         debounceTime(rebuildDebounceTime),
         tap((buildEvent) => {
           buildNumber += 1;
@@ -615,6 +623,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
+        timeout(BUILD_TIMEOUT),
         debounceTime(rebuildDebounceTime),
         tap(() => {
           const content = virtualFs.fileBufferToString(

@@ -7,19 +7,15 @@
  */
 
 import * as http from 'http';
-import { serveWebpackBrowser } from '../../index';
+import { executeDevServer } from '../../index';
 import { executeOnceAndFetch } from '../execute-fetch';
-import {
-  BASE_OPTIONS,
-  DEV_SERVER_BUILDER_INFO,
-  describeBuilder,
-  setupBrowserTarget,
-} from '../setup';
+import { describeServeBuilder } from '../jasmine-helpers';
+import { BASE_OPTIONS, DEV_SERVER_BUILDER_INFO } from '../setup';
 
-describeBuilder(serveWebpackBrowser, DEV_SERVER_BUILDER_INFO, (harness) => {
+describeServeBuilder(executeDevServer, DEV_SERVER_BUILDER_INFO, (harness, setupTarget) => {
   describe('option: "proxyConfig"', () => {
     beforeEach(async () => {
-      setupBrowserTarget(harness);
+      setupTarget(harness);
 
       // Application code is not needed for these tests
       await harness.writeFile('src/main.ts', '');
@@ -162,6 +158,30 @@ describeBuilder(serveWebpackBrowser, DEV_SERVER_BUILDER_INFO, (harness) => {
 
         await harness.writeFiles({
           'proxy.config.mjs': `export default { "/api/*": { "target": "http://127.0.0.1:${proxyAddress.port}" } }`,
+        });
+
+        const { result, response } = await executeOnceAndFetch(harness, '/api/test');
+
+        expect(result?.success).toBeTrue();
+        expect(await response?.text()).toContain('TEST_API_RETURN');
+      } finally {
+        await new Promise<void>((resolve) => proxyServer.close(() => resolve()));
+      }
+    });
+
+    it('supports the Webpack array form of the configuration file', async () => {
+      harness.useTarget('serve', {
+        ...BASE_OPTIONS,
+        proxyConfig: 'proxy.config.json',
+      });
+
+      const proxyServer = createProxyServer();
+      try {
+        await new Promise<void>((resolve) => proxyServer.listen(0, '127.0.0.1', resolve));
+        const proxyAddress = proxyServer.address() as import('net').AddressInfo;
+
+        await harness.writeFiles({
+          'proxy.config.json': `[ { "context": ["/api", "/abc"], "target": "http://127.0.0.1:${proxyAddress.port}" } ]`,
         });
 
         const { result, response } = await executeOnceAndFetch(harness, '/api/test');

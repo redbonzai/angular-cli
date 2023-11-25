@@ -6,16 +6,15 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { StatsAsset, StatsChunk, StatsCompilation } from 'webpack';
 import { Budget, Type } from '../builders/browser/schema';
-import { formatSize } from '../webpack/utils/stats';
+import { formatSize } from '../tools/webpack/utils/stats';
 
 interface Size {
   size: number;
   label?: string;
 }
 
-interface Threshold {
+export interface Threshold {
   limit: number;
   type: ThresholdType;
   severity: ThresholdSeverity;
@@ -29,6 +28,29 @@ enum ThresholdType {
 export enum ThresholdSeverity {
   Warning = 'warning',
   Error = 'error',
+}
+
+export interface BudgetCalculatorResult {
+  severity: ThresholdSeverity;
+  message: string;
+  label?: string;
+}
+
+export interface BudgetChunk {
+  files?: string[];
+  names?: string[];
+  initial?: boolean;
+}
+
+export interface BudgetAsset {
+  name: string;
+  size: number;
+  componentStyle?: boolean;
+}
+
+export interface BudgetStats {
+  chunks?: BudgetChunk[];
+  assets?: BudgetAsset[];
 }
 
 export function* calculateThresholds(budget: Budget): IterableIterator<Threshold> {
@@ -96,24 +118,16 @@ export function* calculateThresholds(budget: Budget): IterableIterator<Threshold
 /**
  * Calculates the sizes for bundles in the budget type provided.
  */
-function calculateSizes(budget: Budget, stats: StatsCompilation): Size[] {
-  if (budget.type === Type.AnyComponentStyle) {
-    // Component style size information is not available post-build, this must
-    // be checked mid-build via the `AnyComponentStyleBudgetChecker` plugin.
-    throw new Error(
-      'Can not calculate size of AnyComponentStyle. Use `AnyComponentStyleBudgetChecker` instead.',
-    );
-  }
-
-  type NonComponentStyleBudgetTypes = Exclude<Budget['type'], Type.AnyComponentStyle>;
+function calculateSizes(budget: Budget, stats: BudgetStats): Size[] {
   type CalculatorTypes = {
-    new (budget: Budget, chunks: StatsChunk[], assets: StatsAsset[]): Calculator;
+    new (budget: Budget, chunks: BudgetChunk[], assets: BudgetAsset[]): Calculator;
   };
-  const calculatorMap: Record<NonComponentStyleBudgetTypes, CalculatorTypes> = {
+  const calculatorMap: Record<Budget['type'], CalculatorTypes> = {
     all: AllCalculator,
     allScript: AllScriptCalculator,
     any: AnyCalculator,
     anyScript: AnyScriptCalculator,
+    anyComponentStyle: AnyComponentStyleCalculator,
     bundle: BundleCalculator,
     initial: InitialCalculator,
   };
@@ -135,14 +149,14 @@ function calculateSizes(budget: Budget, stats: StatsCompilation): Size[] {
 abstract class Calculator {
   constructor(
     protected budget: Budget,
-    protected chunks: StatsChunk[],
-    protected assets: StatsAsset[],
+    protected chunks: BudgetChunk[],
+    protected assets: BudgetAsset[],
   ) {}
 
   abstract calculate(): Size[];
 
   /** Calculates the size of the given chunk for the provided build type. */
-  protected calculateChunkSize(chunk: StatsChunk): number {
+  protected calculateChunkSize(chunk: BudgetChunk): number {
     // No differential builds, get the chunk size by summing its assets.
     if (!chunk.files) {
       return 0;
@@ -161,7 +175,7 @@ abstract class Calculator {
       .reduce((l, r) => l + r, 0);
   }
 
-  protected getAssetSize(asset: StatsAsset): number {
+  protected getAssetSize(asset: BudgetAsset): number {
     return asset.size;
   }
 }
@@ -181,7 +195,7 @@ class BundleCalculator extends Calculator {
       .map((chunk) => this.calculateChunkSize(chunk))
       .reduce((l, r) => l + r, 0);
 
-    return [{ size, label: `bundle ${this.budget.name}` }];
+    return [{ size, label: this.budget.name }];
   }
 }
 
@@ -259,10 +273,24 @@ class AnyCalculator extends Calculator {
 }
 
 /**
+ * Any compoonent stylesheet
+ */
+class AnyComponentStyleCalculator extends Calculator {
+  calculate() {
+    return this.assets
+      .filter((asset) => asset.componentStyle)
+      .map((asset) => ({
+        size: this.getAssetSize(asset),
+        label: asset.name,
+      }));
+  }
+}
+
+/**
  * Calculate the bytes given a string value.
  */
 function calculateBytes(input: string, baseline?: string, factor: 1 | -1 = 1): number {
-  const matches = input.match(/^\s*(\d+(?:\.\d+)?)\s*(%|(?:[mM]|[kK]|[gG])?[bB])?\s*$/);
+  const matches = input.trim().match(/^(\d+(?:\.\d+)?)[ \t]*(%|[kmg]?b)?$/i);
   if (!matches) {
     return NaN;
   }
@@ -294,13 +322,16 @@ function calculateBytes(input: string, baseline?: string, factor: 1 | -1 = 1): n
 
 export function* checkBudgets(
   budgets: Budget[],
-  webpackStats: StatsCompilation,
-): IterableIterator<{ severity: ThresholdSeverity; message: string }> {
-  // Ignore AnyComponentStyle budgets as these are handled in `AnyComponentStyleBudgetChecker`.
-  const computableBudgets = budgets.filter((budget) => budget.type !== Type.AnyComponentStyle);
+  stats: BudgetStats,
+  checkComponentStyles?: boolean,
+): IterableIterator<BudgetCalculatorResult> {
+  // Ignore AnyComponentStyle budgets as these are handled in `AnyComponentStyleBudgetChecker` unless requested
+  const computableBudgets = checkComponentStyles
+    ? budgets
+    : budgets.filter((budget) => budget.type !== Type.AnyComponentStyle);
 
   for (const budget of computableBudgets) {
-    const sizes = calculateSizes(budget, webpackStats);
+    const sizes = calculateSizes(budget, stats);
     for (const { size, label } of sizes) {
       yield* checkThresholds(calculateThresholds(budget), size, label);
     }
@@ -311,7 +342,7 @@ export function* checkThresholds(
   thresholds: IterableIterator<Threshold>,
   size: number,
   label?: string,
-): IterableIterator<{ severity: ThresholdSeverity; message: string }> {
+): IterableIterator<BudgetCalculatorResult> {
   for (const threshold of thresholds) {
     switch (threshold.type) {
       case ThresholdType.Max: {
@@ -322,6 +353,7 @@ export function* checkThresholds(
         const sizeDifference = formatSize(size - threshold.limit);
         yield {
           severity: threshold.severity,
+          label,
           message: `${label} exceeded maximum budget. Budget ${formatSize(
             threshold.limit,
           )} was not met by ${sizeDifference} with a total of ${formatSize(size)}.`,
@@ -336,6 +368,7 @@ export function* checkThresholds(
         const sizeDifference = formatSize(threshold.limit - size);
         yield {
           severity: threshold.severity,
+          label,
           message: `${label} failed to meet minimum budget. Budget ${formatSize(
             threshold.limit,
           )} was not met by ${sizeDifference} with a total of ${formatSize(size)}.`,

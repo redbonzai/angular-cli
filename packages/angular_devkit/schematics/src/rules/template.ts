@@ -11,7 +11,6 @@ import { TextDecoder } from 'util';
 import { FileOperator, Rule } from '../engine/interface';
 import { FileEntry } from '../tree/interface';
 import { chain, composeFileOperators, forEach, when } from './base';
-import { rename } from './rename';
 
 export const TEMPLATE_FILENAME_RE = /\.template$/;
 
@@ -63,7 +62,7 @@ export function applyContentTemplate<T>(options: T): FileOperator {
         content: Buffer.from(templateImpl(decodedContent, {})(options)),
       };
     } catch (e) {
-      if (e.code === 'ERR_ENCODING_INVALID_ENCODED_DATA') {
+      if ((e as NodeJS.ErrnoException).code === 'ERR_ENCODING_INVALID_ENCODED_DATA') {
         return entry;
       }
 
@@ -157,30 +156,36 @@ export function pathTemplate<T extends PathTemplateData>(options: T): Rule {
  * Remove every `.template` suffix from file names.
  */
 export function renameTemplateFiles(): Rule {
-  return rename(
-    (path) => !!path.match(TEMPLATE_FILENAME_RE),
-    (path) => path.replace(TEMPLATE_FILENAME_RE, ''),
-  );
+  return forEach((entry) => {
+    if (entry.path.match(TEMPLATE_FILENAME_RE)) {
+      return {
+        content: entry.content,
+        path: normalize(entry.path.replace(TEMPLATE_FILENAME_RE, '')),
+      };
+    } else {
+      return entry;
+    }
+  });
 }
 
-export function template<T>(options: T): Rule {
+export function template<T extends object>(options: T): Rule {
   return chain([
     contentTemplate(options),
     // Force cast to PathTemplateData. We need the type for the actual pathTemplate() call,
     // but in this case we cannot do anything as contentTemplate are more permissive.
     // Since values are coerced to strings in PathTemplates it will be fine in the end.
-    pathTemplate((options as {}) as PathTemplateData),
+    pathTemplate(options as {} as PathTemplateData),
   ]);
 }
 
-export function applyTemplates<T>(options: T): Rule {
+export function applyTemplates<T extends object>(options: T): Rule {
   return forEach(
     when(
       (path) => path.endsWith('.template'),
       composeFileOperators([
         applyContentTemplate(options),
         // See above for this weird cast.
-        applyPathTemplate((options as {}) as PathTemplateData),
+        applyPathTemplate(options as {} as PathTemplateData),
         (entry) => {
           return {
             content: entry.content,

@@ -8,9 +8,9 @@
 
 import { BuilderContext, BuilderOutput, createBuilder } from '@angular-devkit/architect';
 import { join, resolve } from 'path';
-import { Observable, from, of } from 'rxjs';
-import { catchError, mapTo, switchMap } from 'rxjs/operators';
+import { Observable, catchError, from, mapTo, of, switchMap } from 'rxjs';
 import { normalizeCacheOptions } from '../../utils/normalize-cache';
+import { purgeStaleBuildCache } from '../../utils/purge-cache';
 import { Schema as NgPackagrBuilderOptions } from './schema';
 
 /**
@@ -22,6 +22,9 @@ export function execute(
 ): Observable<BuilderOutput> {
   return from(
     (async () => {
+      // Purge old build disk cache.
+      await purgeStaleBuildCache(context);
+
       const root = context.workspaceRoot;
       const packager = (await import('ng-packagr')).ngPackagr();
 

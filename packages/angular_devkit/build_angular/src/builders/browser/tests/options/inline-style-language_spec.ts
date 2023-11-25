@@ -6,7 +6,7 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { concatMap, count, take, timeout } from 'rxjs/operators';
+import { concatMap, count, take, timeout } from 'rxjs';
 import { buildWebpackBrowser } from '../../index';
 import { InlineStyleLanguage } from '../../schema';
 import { BASE_OPTIONS, BROWSER_BUILDER_INFO, describeBuilder } from '../setup';
@@ -32,13 +32,13 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
           });
 
           await harness.modifyFile('src/app/app.component.ts', (content) =>
-            content.replace('__STYLE_MARKER__', '$primary: green;\\nh1 { color: $primary; }'),
+            content.replace('__STYLE_MARKER__', '$primary: indianred;\\nh1 { color: $primary; }'),
           );
 
           const { result } = await harness.executeOnce();
 
           expect(result?.success).toBe(true);
-          harness.expectFile('dist/main.js').content.toContain('color: green');
+          harness.expectFile('dist/main.js').content.toContain('color: indianred');
         });
 
         it('supports Sass inline component styles when set to "sass"', async () => {
@@ -49,37 +49,14 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
           });
 
           await harness.modifyFile('src/app/app.component.ts', (content) =>
-            content.replace('__STYLE_MARKER__', '$primary: green\\nh1\\n\\tcolor: $primary'),
+            content.replace('__STYLE_MARKER__', '$primary: indianred\\nh1\\n\\tcolor: $primary'),
           );
 
           const { result } = await harness.executeOnce();
 
           expect(result?.success).toBe(true);
-          harness.expectFile('dist/main.js').content.toContain('color: green');
+          harness.expectFile('dist/main.js').content.toContain('color: indianred');
         });
-
-        // Stylus currently does not function due to the sourcemap logic within the `stylus-loader`
-        // which tries to read each stylesheet directly from disk. In this case, each stylesheet is
-        // virtual and cannot be read from disk. This issue affects data URIs in general.
-        // xit('supports Stylus inline component styles when set to "stylus"', async () => {
-        //   harness.useTarget('build', {
-        //     ...BASE_OPTIONS,
-        //     inlineStyleLanguage: InlineStyleLanguage.Stylus,
-        //     aot,
-        //   });
-
-        //   await harness.modifyFile('src/app/app.component.ts', (content) =>
-        //     content.replace(
-        //       '__STYLE_MARKER__',
-        //       '$primary = green;\\nh1 { color: $primary; }',
-        //     ),
-        //   );
-
-        //   const { result } = await harness.executeOnce();
-
-        //   expect(result?.success).toBe(true);
-        //   harness.expectFile('dist/main.js').content.toContain('color: green');
-        // });
 
         it('supports Less inline component styles when set to "less"', async () => {
           harness.useTarget('build', {
@@ -89,13 +66,13 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
           });
 
           await harness.modifyFile('src/app/app.component.ts', (content) =>
-            content.replace('__STYLE_MARKER__', '@primary: green;\\nh1 { color: @primary; }'),
+            content.replace('__STYLE_MARKER__', '@primary: indianred;\\nh1 { color: @primary; }'),
           );
 
           const { result } = await harness.executeOnce();
 
           expect(result?.success).toBe(true);
-          harness.expectFile('dist/main.js').content.toContain('color: green');
+          harness.expectFile('dist/main.js').content.toContain('color: indianred');
         });
 
         it('updates produced stylesheet in watch mode', async () => {
@@ -108,7 +85,7 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
           });
 
           await harness.modifyFile('src/app/app.component.ts', (content) =>
-            content.replace('__STYLE_MARKER__', '$primary: green;\\nh1 { color: $primary; }'),
+            content.replace('__STYLE_MARKER__', '$primary: indianred;\\nh1 { color: $primary; }'),
           );
 
           const buildCount = await harness
@@ -120,18 +97,18 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
 
                 switch (index) {
                   case 0:
-                    harness.expectFile('dist/main.js').content.toContain('color: green');
+                    harness.expectFile('dist/main.js').content.toContain('color: indianred');
                     harness.expectFile('dist/main.js').content.not.toContain('color: aqua');
 
                     await harness.modifyFile('src/app/app.component.ts', (content) =>
                       content.replace(
-                        '$primary: green;\\nh1 { color: $primary; }',
+                        '$primary: indianred;\\nh1 { color: $primary; }',
                         '$primary: aqua;\\nh1 { color: $primary; }',
                       ),
                     );
                     break;
                   case 1:
-                    harness.expectFile('dist/main.js').content.not.toContain('color: green');
+                    harness.expectFile('dist/main.js').content.not.toContain('color: indianred');
                     harness.expectFile('dist/main.js').content.toContain('color: aqua');
 
                     await harness.modifyFile('src/app/app.component.ts', (content) =>
@@ -142,7 +119,7 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
                     );
                     break;
                   case 2:
-                    harness.expectFile('dist/main.js').content.not.toContain('color: green');
+                    harness.expectFile('dist/main.js').content.not.toContain('color: indianred');
                     harness.expectFile('dist/main.js').content.not.toContain('color: aqua');
                     harness.expectFile('dist/main.js').content.toContain('color: blue');
                     break;

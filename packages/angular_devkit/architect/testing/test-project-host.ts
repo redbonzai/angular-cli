@@ -18,8 +18,19 @@ import {
 } from '@angular-devkit/core';
 import { NodeJsSyncHost } from '@angular-devkit/core/node';
 import { Stats } from 'fs';
-import { EMPTY, Observable, from, of } from 'rxjs';
-import { concatMap, delay, finalize, map, mergeMap, retry, tap } from 'rxjs/operators';
+import {
+  EMPTY,
+  Observable,
+  concatMap,
+  delay,
+  finalize,
+  from,
+  map,
+  mergeMap,
+  of,
+  retry,
+  tap,
+} from 'rxjs';
 
 /**
  * @deprecated
@@ -63,7 +74,7 @@ export class TestProjectHost extends NodeJsSyncHost {
         ),
       );
 
-    // Find a unique folder that we can write to to use as current root.
+    // Find a unique folder that we can write to use as current root.
     return this.findUniqueFolderPath().pipe(
       // Save the path and create a scoped host for it.
       tap((newFolderPath) => {

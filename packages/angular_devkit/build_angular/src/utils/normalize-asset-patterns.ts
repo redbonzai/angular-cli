@@ -6,56 +6,47 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import {
-  BaseException,
-  Path,
-  basename,
-  dirname,
-  getSystemPath,
-  join,
-  normalize,
-  relative,
-  resolve,
-} from '@angular-devkit/core';
+import { BaseException } from '@angular-devkit/core';
 import { statSync } from 'fs';
+import * as path from 'path';
 import { AssetPattern, AssetPatternClass } from '../builders/browser/schema';
 
 export class MissingAssetSourceRootException extends BaseException {
-  constructor(path: String) {
+  constructor(path: string) {
     super(`The ${path} asset path must start with the project source root.`);
   }
 }
 
 export function normalizeAssetPatterns(
   assetPatterns: AssetPattern[],
-  root: Path,
-  projectRoot: Path,
-  maybeSourceRoot: Path | undefined,
+  workspaceRoot: string,
+  projectRoot: string,
+  projectSourceRoot: string | undefined,
 ): AssetPatternClass[] {
-  // When sourceRoot is not available, we default to ${projectRoot}/src.
-  const sourceRoot = maybeSourceRoot || join(projectRoot, 'src');
-  const resolvedSourceRoot = resolve(root, sourceRoot);
-
   if (assetPatterns.length === 0) {
     return [];
   }
 
+  // When sourceRoot is not available, we default to ${projectRoot}/src.
+  const sourceRoot = projectSourceRoot || path.join(projectRoot, 'src');
+  const resolvedSourceRoot = path.resolve(workspaceRoot, sourceRoot);
+
   return assetPatterns.map((assetPattern) => {
     // Normalize string asset patterns to objects.
     if (typeof assetPattern === 'string') {
-      const assetPath = normalize(assetPattern);
-      const resolvedAssetPath = resolve(root, assetPath);
+      const assetPath = path.normalize(assetPattern);
+      const resolvedAssetPath = path.resolve(workspaceRoot, assetPath);
 
       // Check if the string asset is within sourceRoot.
       if (!resolvedAssetPath.startsWith(resolvedSourceRoot)) {
         throw new MissingAssetSourceRootException(assetPattern);
       }
 
-      let glob: string, input: Path;
+      let glob: string, input: string;
       let isDirectory = false;
 
       try {
-        isDirectory = statSync(getSystemPath(resolvedAssetPath)).isDirectory();
+        isDirectory = statSync(resolvedAssetPath).isDirectory();
       } catch {
         isDirectory = true;
       }
@@ -67,19 +58,23 @@ export function normalizeAssetPatterns(
         input = assetPath;
       } else {
         // Files are their own glob.
-        glob = basename(assetPath);
+        glob = path.basename(assetPath);
         // Input directory is their original dirname.
-        input = dirname(assetPath);
+        input = path.dirname(assetPath);
       }
 
       // Output directory for both is the relative path from source root to input.
-      const output = relative(resolvedSourceRoot, resolve(root, input));
+      const output = path.relative(resolvedSourceRoot, path.resolve(workspaceRoot, input));
 
-      // Return the asset pattern in object format.
-      return { glob, input, output };
+      assetPattern = { glob, input, output };
     } else {
-      // It's already an AssetPatternObject, no need to convert.
-      return assetPattern;
+      assetPattern.output = path.join('.', assetPattern.output);
     }
+
+    if (assetPattern.output.startsWith('..')) {
+      throw new Error('An asset cannot be written to a location outside of the output path.');
+    }
+
+    return assetPattern;
   });
 }

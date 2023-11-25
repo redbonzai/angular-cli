@@ -22,7 +22,7 @@ setPublicVar PATH "${HOME}/.npm-global/bin:${PATH}";
 # Define SauceLabs environment variables for CircleCI.
 ####################################################################################################
 setPublicVar SAUCE_USERNAME "angular-tooling";
-setSecretVar SAUCE_ACCESS_KEY "8c4ffce86ae6-c419-8ef4-0513-54267305";
+setSecretVar SAUCE_ACCESS_KEY "e05dabf6fe0e-2c18-abf4-496d-1d010490";
 setPublicVar SAUCE_LOG_FILE /tmp/angular/sauce-connect.log
 setPublicVar SAUCE_READY_FILE /tmp/angular/sauce-connect-ready-file.lock
 setPublicVar SAUCE_PID_FILE /tmp/angular/sauce-connect-pid-file.lock
@@ -33,3 +33,11 @@ setPublicVar SAUCE_READY_FILE_TIMEOUT 120
 
 # Source `$BASH_ENV` to make the variables available immediately.
 source $BASH_ENV;
+
+# Disable husky.
+setPublicVar HUSKY 0
+
+# Expose the Bazelisk version. We need to run Bazelisk globally since Windows has problems launching
+# Bazel from a node modules directoy that might be modified by the Bazel Yarn install then.
+setPublicVar BAZELISK_VERSION \
+    "$(cd ${PROJECT_ROOT}; node -p 'require("./package.json").devDependencies["@bazel/bazelisk"]')"

@@ -8,7 +8,7 @@
 
 import { Architect } from '@angular-devkit/architect';
 import { join, virtualFs } from '@angular-devkit/core';
-import { take, tap } from 'rxjs/operators';
+import { take, tap } from 'rxjs';
 import { createArchitect, host, outputPath } from '../../../testing/test-utils';
 
 describe('Browser Builder resolve json module', () => {
@@ -29,8 +29,8 @@ describe('Browser Builder resolve json module', () => {
 
     host.replaceInFile(
       'tsconfig.json',
-      '"target": "es2017"',
-      '"target": "es5", "resolveJsonModule": true',
+      '"target": "es2022"',
+      '"target": "es2022", "resolveJsonModule": true',
     );
 
     const overrides = { watch: true };
@@ -62,5 +62,7 @@ describe('Browser Builder resolve json module', () => {
         take(2),
       )
       .toPromise();
+
+    await run.stop();
   });
 });

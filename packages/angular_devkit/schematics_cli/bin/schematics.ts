@@ -14,8 +14,10 @@ import { ProcessOutput, createConsoleLogger } from '@angular-devkit/core/node';
 import { UnsuccessfulWorkflowExecution } from '@angular-devkit/schematics';
 import { NodeWorkflow } from '@angular-devkit/schematics/tools';
 import * as ansiColors from 'ansi-colors';
-import * as inquirer from 'inquirer';
-import minimist from 'minimist';
+import { existsSync } from 'fs';
+import type { Question, QuestionCollection } from 'inquirer';
+import * as path from 'path';
+import yargsParser, { camelCase, decamelize } from 'yargs-parser';
 
 /**
  * Parse the name of schematic passed in argument, and return a {collection, schematic} named
@@ -35,10 +37,11 @@ function parseSchematicName(str: string | null): { collection: string; schematic
   let collection = '@angular-devkit/schematics-cli';
 
   let schematic = str;
-  if (schematic && schematic.indexOf(':') != -1) {
+  if (schematic?.includes(':')) {
+    const lastIndexOfColon = schematic.lastIndexOf(':');
     [collection, schematic] = [
-      schematic.slice(0, schematic.lastIndexOf(':')),
-      schematic.substring(schematic.lastIndexOf(':') + 1),
+      schematic.slice(0, lastIndexOfColon),
+      schematic.substring(lastIndexOfColon + 1),
     ];
   }
 
@@ -56,7 +59,7 @@ function _listSchematics(workflow: NodeWorkflow, collectionName: string, logger:
     const collection = workflow.engine.createCollection(collectionName);
     logger.info(collection.listSchematicNames().join('\n'));
   } catch (error) {
-    logger.fatal(error.message);
+    logger.fatal(error instanceof Error ? error.message : `${error}`);
 
     return 1;
   }
@@ -65,9 +68,9 @@ function _listSchematics(workflow: NodeWorkflow, collectionName: string, logger:
 }
 
 function _createPromptProvider(): schema.PromptProvider {
-  return (definitions) => {
-    const questions: inquirer.QuestionCollection = definitions.map((definition) => {
-      const question: inquirer.Question = {
+  return async (definitions) => {
+    const questions: QuestionCollection = definitions.map((definition) => {
+      const question: Question = {
         name: definition.id,
         message: definition.message,
         default: definition.default,
@@ -76,6 +79,32 @@ function _createPromptProvider(): schema.PromptProvider {
       const validator = definition.validator;
       if (validator) {
         question.validate = (input) => validator(input);
+
+        // Filter allows transformation of the value prior to validation
+        question.filter = async (input) => {
+          for (const type of definition.propertyTypes) {
+            let value;
+            switch (type) {
+              case 'string':
+                value = String(input);
+                break;
+              case 'integer':
+              case 'number':
+                value = Number(input);
+                break;
+              default:
+                value = input;
+                break;
+            }
+            // Can be a string if validation fails
+            const isValid = (await validator(value)) === true;
+            if (isValid) {
+              return value;
+            }
+          }
+
+          return input;
+        };
       }
 
       switch (definition.type) {
@@ -102,9 +131,49 @@ function _createPromptProvider(): schema.PromptProvider {
           return { ...question, type: definition.type };
       }
     });
+    const { default: inquirer } = await loadEsmModule<typeof import('inquirer')>('inquirer');
 
     return inquirer.prompt(questions);
   };
+}
+
+function findUp(names: string | string[], from: string) {
+  if (!Array.isArray(names)) {
+    names = [names];
+  }
+  const root = path.parse(from).root;
+
+  let currentDir = from;
+  while (currentDir && currentDir !== root) {
+    for (const name of names) {
+      const p = path.join(currentDir, name);
+      if (existsSync(p)) {
+        return p;
+      }
+    }
+
+    currentDir = path.dirname(currentDir);
+  }
+
+  return null;
+}
+
+/**
+ * return package manager' name by lock file
+ */
+function getPackageManagerName() {
+  // order by check priority
+  const LOCKS: Record<string, string> = {
+    'package-lock.json': 'npm',
+    'yarn.lock': 'yarn',
+    'pnpm-lock.yaml': 'pnpm',
+  };
+  const lockPath = findUp(Object.keys(LOCKS), process.cwd());
+  if (lockPath) {
+    return LOCKS[path.basename(lockPath)];
+  }
+
+  return 'npm';
 }
 
 // eslint-disable-next-line max-lines-per-function
@@ -113,14 +182,13 @@ export async function main({
   stdout = process.stdout,
   stderr = process.stderr,
 }: MainOptions): Promise<0 | 1> {
-  const argv = parseArgs(args);
+  const { cliOptions, schematicOptions, _ } = parseArgs(args);
 
   // Create a separate instance to prevent unintended global changes to the color configuration
-  // Create function is not defined in the typings. See: https://github.com/doowb/ansi-colors/pull/44
-  const colors = (ansiColors as typeof ansiColors & { create: () => typeof ansiColors }).create();
+  const colors = ansiColors.create();
 
   /** Create the DevKit Logger used through the CLI. */
-  const logger = createConsoleLogger(argv['verbose'], stdout, stderr, {
+  const logger = createConsoleLogger(!!cliOptions.verbose, stdout, stderr, {
     info: (s) => s,
     debug: (s) => s,
     warn: (s) => colors.bold.yellow(s),
@@ -128,7 +196,7 @@ export async function main({
     fatal: (s) => colors.bold.red(s),
   });
 
-  if (argv.help) {
+  if (cliOptions.help) {
     logger.info(getUsage());
 
     return 0;
@@ -136,18 +204,18 @@ export async function main({
 
   /** Get the collection an schematic name from the first argument. */
   const { collection: collectionName, schematic: schematicName } = parseSchematicName(
-    argv._.shift() || null,
+    _.shift() || null,
   );
 
   const isLocalCollection = collectionName.startsWith('.') || collectionName.startsWith('/');
 
   /** Gather the arguments for later use. */
-  const debugPresent = argv['debug'] !== null;
-  const debug = debugPresent ? !!argv['debug'] : isLocalCollection;
-  const dryRunPresent = argv['dry-run'] !== null;
-  const dryRun = dryRunPresent ? !!argv['dry-run'] : debug;
-  const force = argv['force'];
-  const allowPrivate = argv['allow-private'];
+  const debugPresent = cliOptions.debug !== null;
+  const debug = debugPresent ? !!cliOptions.debug : isLocalCollection;
+  const dryRunPresent = cliOptions['dry-run'] !== null;
+  const dryRun = dryRunPresent ? !!cliOptions['dry-run'] : debug;
+  const force = !!cliOptions.force;
+  const allowPrivate = !!cliOptions['allow-private'];
 
   /** Create the workflow scoped to the working directory that will be executed with this run. */
   const workflow = new NodeWorkflow(process.cwd(), {
@@ -155,10 +223,11 @@ export async function main({
     dryRun,
     resolvePaths: [process.cwd(), __dirname],
     schemaValidation: true,
+    packageManager: getPackageManagerName(),
   });
 
   /** If the user wants to list schematics, we simply show all the schematic names. */
-  if (argv['list-schematics']) {
+  if (cliOptions['list-schematics']) {
     return _listSchematics(workflow, collectionName, logger);
   }
 
@@ -196,7 +265,7 @@ export async function main({
   workflow.reporter.subscribe((event) => {
     nothingDone = false;
     // Strip leading slash to prevent confusion.
-    const eventPath = event.path.startsWith('/') ? event.path.substr(1) : event.path;
+    const eventPath = event.path.startsWith('/') ? event.path.slice(1) : event.path;
 
     switch (event.kind) {
       case 'error':
@@ -215,7 +284,7 @@ export async function main({
         loggingQueue.push(`${colors.yellow('DELETE')} ${eventPath}`);
         break;
       case 'rename':
-        const eventToPath = event.to.startsWith('/') ? event.to.substr(1) : event.to;
+        const eventToPath = event.to.startsWith('/') ? event.to.slice(1) : event.to;
         loggingQueue.push(`${colors.blue('RENAME')} ${eventPath} => ${eventToPath}`);
         break;
     }
@@ -236,39 +305,16 @@ export async function main({
     }
   });
 
-  /**
-   * Remove every options from argv that we support in schematics itself.
-   */
-  const parsedArgs = Object.assign({}, argv) as Record<string, unknown>;
-  delete parsedArgs['--'];
-  for (const key of booleanArgs) {
-    delete parsedArgs[key];
-  }
-
-  /**
-   * Add options from `--` to args.
-   */
-  const argv2 = minimist(argv['--']);
-  for (const key of Object.keys(argv2)) {
-    parsedArgs[key] = argv2[key];
-  }
-
   // Show usage of deprecated options
   workflow.registry.useXDeprecatedProvider((msg) => logger.warn(msg));
 
   // Pass the rest of the arguments as the smart default "argv". Then delete it.
-  workflow.registry.addSmartDefaultProvider('argv', (schema) => {
-    if ('index' in schema) {
-      return argv._[Number(schema['index'])];
-    } else {
-      return argv._;
-    }
-  });
-
-  delete parsedArgs._;
+  workflow.registry.addSmartDefaultProvider('argv', (schema) =>
+    'index' in schema ? _[Number(schema['index'])] : _,
+  );
 
   // Add prompts.
-  if (argv['interactive'] && isTTY()) {
+  if (cliOptions.interactive && isTTY()) {
     workflow.registry.usePromptProvider(_createPromptProvider());
   }
 
@@ -285,7 +331,7 @@ export async function main({
       .execute({
         collection: collectionName,
         schematic: schematicName,
-        options: parsedArgs,
+        options: schematicOptions,
         allowPrivate: allowPrivate,
         debug: debug,
         logger: logger,
@@ -307,10 +353,10 @@ export async function main({
     if (err instanceof UnsuccessfulWorkflowExecution) {
       // "See above" because we already printed the error.
       logger.fatal('The Schematic workflow failed. See above.');
-    } else if (debug) {
-      logger.fatal('An error occured:\n' + err.stack);
+    } else if (debug && err instanceof Error) {
+      logger.fatal(`An error occured:\n${err.stack}`);
     } else {
-      logger.fatal(err.stack || err.message);
+      logger.fatal(`Error: ${err instanceof Error ? err.message : err}`);
     }
 
     return 1;
@@ -322,7 +368,7 @@ export async function main({
  */
 function getUsage(): string {
   return tags.stripIndent`
-  schematics [CollectionName:]SchematicName [options, ...]
+  schematics [collection-name:]schematic-name [options, ...]
 
   By default, if the collection name is not specified, use the internal collection provided
   by the Schematics CLI.
@@ -354,34 +400,69 @@ function getUsage(): string {
 
 /** Parse the command line. */
 const booleanArgs = [
-  'allowPrivate',
   'allow-private',
   'debug',
   'dry-run',
-  'dryRun',
   'force',
   'help',
   'list-schematics',
-  'listSchematics',
   'verbose',
   'interactive',
-];
+] as const;
 
-function parseArgs(args: string[] | undefined): minimist.ParsedArgs {
-  return minimist(args, {
-    boolean: booleanArgs,
-    alias: {
-      'dryRun': 'dry-run',
-      'listSchematics': 'list-schematics',
-      'allowPrivate': 'allow-private',
-    },
+type ElementType<T extends ReadonlyArray<unknown>> = T extends ReadonlyArray<infer ElementType>
+  ? ElementType
+  : never;
+
+interface Options {
+  _: string[];
+  schematicOptions: Record<string, unknown>;
+  cliOptions: Partial<Record<ElementType<typeof booleanArgs>, boolean | null>>;
+}
+
+/** Parse the command line. */
+function parseArgs(args: string[]): Options {
+  const { _, ...options } = yargsParser(args, {
+    boolean: booleanArgs as unknown as string[],
     default: {
       'interactive': true,
       'debug': null,
-      'dryRun': null,
+      'dry-run': null,
     },
-    '--': true,
+    configuration: {
+      'dot-notation': false,
+      'boolean-negation': true,
+      'strip-aliased': true,
+      'camel-case-expansion': false,
+    },
   });
+
+  // Camelize options as yargs will return the object in kebab-case when camel casing is disabled.
+  const schematicOptions: Options['schematicOptions'] = {};
+  const cliOptions: Options['cliOptions'] = {};
+
+  const isCliOptions = (
+    key: ElementType<typeof booleanArgs> | string,
+  ): key is ElementType<typeof booleanArgs> =>
+    booleanArgs.includes(key as ElementType<typeof booleanArgs>);
+
+  for (const [key, value] of Object.entries(options)) {
+    if (/[A-Z]/.test(key)) {
+      throw new Error(`Unknown argument ${key}. Did you mean ${decamelize(key)}?`);
+    }
+
+    if (isCliOptions(key)) {
+      cliOptions[key] = value;
+    } else {
+      schematicOptions[camelCase(key)] = value;
+    }
+  }
+
+  return {
+    _: _.map((v) => v.toString()),
+    schematicOptions,
+    cliOptions,
+  };
 }
 
 function isTTY(): boolean {
@@ -406,4 +487,30 @@ if (require.main === module) {
     .catch((e) => {
       throw e;
     });
+}
+
+/**
+ * Lazily compiled dynamic import loader function.
+ */
+let load: (<T>(modulePath: string | URL) => Promise<T>) | undefined;
+
+/**
+ * This uses a dynamic import to load a module which may be ESM.
+ * CommonJS code can load ESM code via a dynamic import. Unfortunately, TypeScript
+ * will currently, unconditionally downlevel dynamic import into a require call.
+ * require calls cannot load ESM code and will result in a runtime error. To workaround
+ * this, a Function constructor is used to prevent TypeScript from changing the dynamic import.
+ * Once TypeScript provides support for keeping the dynamic import this workaround can
+ * be dropped.
+ *
+ * @param modulePath The path of the module to load.
+ * @returns A Promise that resolves to the dynamically imported module.
+ */
+export function loadEsmModule<T>(modulePath: string | URL): Promise<T> {
+  load ??= new Function('modulePath', `return import(modulePath);`) as Exclude<
+    typeof load,
+    undefined
+  >;
+
+  return load(modulePath);
 }

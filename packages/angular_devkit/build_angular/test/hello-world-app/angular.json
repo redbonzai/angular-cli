@@ -8,7 +8,6 @@
     }
   },
   "schematics": {},
-  "targets": {},
   "projects": {
     "app": {
       "root": "src",
@@ -44,12 +43,6 @@
           },
           "configurations": {
             "production": {
-              "fileReplacements": [
-                {
-                  "replace": "src/environments/environment.ts",
-                  "with": "src/environments/environment.prod.ts"
-                }
-              ],
               "optimization": true,
               "outputHashing": "all",
               "sourceMap": false,
@@ -68,6 +61,10 @@
                 "scripts": true,
                 "fonts": true
               }
+            },
+            "sw": {
+              "ngswConfigPath": "src/ngsw-config.json",
+              "serviceWorker": true
             }
           }
         },
@@ -81,6 +78,13 @@
             "sourceMap": true,
             "optimization": false,
             "extractLicenses": false
+          },
+          "configurations": {
+            "production": {
+              "outputHashing": "media",
+              "sourceMap": false,
+              "optimization": true
+            }
           }
         },
         "app-shell": {
@@ -118,8 +122,10 @@
         "test": {
           "builder": "@angular-devkit/build-angular:karma",
           "options": {
-            "main": "src/test.ts",
-            "polyfills": "src/polyfills.ts",
+            "polyfills": [
+              "zone.js",
+              "zone.js/testing"
+            ],
             "tsConfig": "src/tsconfig.spec.json",
             "karmaConfig": "karma.conf.js",
             "browsers": "ChromeHeadlessCI",
@@ -135,6 +141,34 @@
               "src/favicon.ico",
               "src/assets"
             ]
+          }
+        },
+        "serve-ssr": {
+          "builder": "@angular-devkit/build-angular:ssr-dev-server",
+          "options": {
+            "browserTarget": "app:build",
+            "serverTarget": "app:server",
+            "watch": false,
+            "progress": false
+          },
+          "configurations": {
+            "production": {
+              "browserTarget": "app:build:production",
+              "serverTarget": "app:server:production"
+            }
+          }
+        },
+        "prerender": {
+          "builder": "@angular-devkit/build-angular:prerender",
+          "options": {
+            "browserTarget": "app:build",
+            "serverTarget": "app:server"
+          },
+          "configurations": {
+            "production": {
+              "browserTarget": "app:build:production",
+              "serverTarget": "app:server:production"
+            }
           }
         }
       }

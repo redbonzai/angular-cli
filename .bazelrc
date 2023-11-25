@@ -1,5 +1,5 @@
 # Disable NG CLI TTY mode
-test --action_env=NG_FORCE_TTY=false
+build --action_env=NG_FORCE_TTY=false
 
 # Make TypeScript compilation fast, by keeping a few copies of the compiler
 # running as daemons, and cache SourceFile AST's to reduce parse time.
@@ -7,6 +7,10 @@ build --strategy=TypeScriptCompile=worker
 
 # Enable debugging tests with --config=debug
 test:debug --test_arg=--node_options=--inspect-brk --test_output=streamed --test_strategy=exclusive --test_timeout=9999 --nocache_test_results
+
+# Enable debugging tests with --config=no-sharding
+# The below is useful to while using `fit` and `fdescribe` to avoid sharing and re-runs of failed flaky tests.
+test:no-sharding --flaky_test_attempts=1 --test_sharding_strategy=disabled
 
 ###############################
 # Filesystem interactions     #
@@ -30,8 +34,7 @@ build --symlink_prefix=dist/
 build --nowatchfs
 
 # Turn off legacy external runfiles
-run --nolegacy_external_runfiles
-test --nolegacy_external_runfiles
+build --nolegacy_external_runfiles
 
 # Turn on --incompatible_strict_action_env which was on by default
 # in Bazel 0.21.0 but turned off again in 0.22.0. Follow
@@ -42,6 +45,18 @@ test --nolegacy_external_runfiles
 build --incompatible_strict_action_env
 run --incompatible_strict_action_env
 test --incompatible_strict_action_env
+
+# Enable remote caching of build/action tree
+build --experimental_remote_merkle_tree_cache
+
+# Ensure that tags applied in BUILDs propagate to actions
+common --experimental_allow_tags_propagation
+
+# Don't check if output files have been modified
+build --noexperimental_check_output_files
+
+# Ensure sandboxing is enabled even for exclusive tests
+test --incompatible_exclusive_test_sandboxed
 
 ###############################
 # Saucelabs support           #
@@ -68,7 +83,21 @@ test:saucelabs --define=KARMA_WEB_TEST_MODE=SL_REQUIRED
 # Releases should always be stamped with version control info
 # This command assumes node on the path and is a workaround for
 # https://github.com/bazelbuild/bazel/issues/4802
-build:release --workspace_status_command="yarn -s ng-dev release build-env-stamp"
+build:release --workspace_status_command="yarn -s ng-dev release build-env-stamp --mode=release"
+build:release --stamp
+
+build:snapshot --workspace_status_command="yarn -s ng-dev release build-env-stamp --mode=snapshot"
+build:snapshot --stamp
+build:snapshot --//:enable_snapshot_repo_deps
+
+build:e2e --workspace_status_command="yarn -s ng-dev release build-env-stamp --mode=release"
+build:e2e --stamp
+test:e2e --test_timeout=3600 --experimental_ui_max_stdouterr_bytes=2097152
+
+# Retry in the event of flakes
+test:e2e --flaky_test_attempts=2
+
+build:local --//:enable_package_json_tar_deps
 
 ###############################
 # Output                      #
@@ -93,7 +122,7 @@ test --test_output=errors
 
 # Use the Angular team internal GCP instance for remote execution.
 build:remote --remote_instance_name=projects/internal-200822/instances/primary_instance
-build:remote --project_id=internal-200822
+build:remote --bes_instance_name=internal-200822
 
 # Starting with Bazel 0.27.0 strategies do not need to be explicitly
 # defined. See https://github.com/bazelbuild/bazel/issues/7480
@@ -107,11 +136,11 @@ build:remote --jobs=150
 
 # Setup the toolchain and platform for the remote build execution. The platform
 # is provided by the shared dev-infra package and targets k8 remote containers.
-build:remote --crosstool_top=@npm//@angular/dev-infra-private/bazel/remote-execution/cpp:cc_toolchain_suite
-build:remote --extra_toolchains=@npm//@angular/dev-infra-private/bazel/remote-execution/cpp:cc_toolchain
-build:remote --extra_execution_platforms=//tools:rbe_platform_with_network_access
-build:remote --host_platform=//tools:rbe_platform_with_network_access
-build:remote --platforms=//tools:rbe_platform_with_network_access
+build:remote --crosstool_top=@npm//@angular/build-tooling/bazel/remote-execution/cpp:cc_toolchain_suite
+build:remote --extra_toolchains=@npm//@angular/build-tooling/bazel/remote-execution/cpp:cc_toolchain
+build:remote --extra_execution_platforms=@npm//@angular/build-tooling/bazel/remote-execution:platform_with_network
+build:remote --host_platform=@npm//@angular/build-tooling/bazel/remote-execution:platform_with_network
+build:remote --platforms=@npm//@angular/build-tooling/bazel/remote-execution:platform_with_network
 
 # Set remote caching settings
 build:remote --remote_accept_cached=true
@@ -124,10 +153,19 @@ build:remote --host_cpu=k8
 # Set up authentication mechanism for RBE
 build:remote --google_default_credentials
 
+# Use HTTP remote cache
+build:remote-cache --remote_cache=https://storage.googleapis.com/angular-team-cache
+build:remote-cache --remote_accept_cached=true
+build:remote-cache --remote_upload_local_results=true
+build:remote-cache --google_default_credentials
+
 ###############################
 # NodeJS rules settings
 # These settings are required for rules_nodejs
 ###############################
+
+# Fixes use of npm paths with spaces such as some within the puppeteer module
+build --experimental_inprocess_symlink_creation
 
 ####################################################
 # User bazel configuration
@@ -140,4 +178,4 @@ try-import .bazelrc.user
 
 # Enable runfiles even on Windows.
 # Architect resolves output files from data files, and this isn't possible without runfile support.
-test --enable_runfiles
+build --enable_runfiles

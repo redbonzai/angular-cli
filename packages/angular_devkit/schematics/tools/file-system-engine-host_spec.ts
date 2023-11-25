@@ -11,7 +11,7 @@ import { normalize, virtualFs } from '@angular-devkit/core';
 import { HostSink, HostTree, SchematicEngine } from '@angular-devkit/schematics';
 import { FileSystemEngineHost } from '@angular-devkit/schematics/tools';
 import * as path from 'path';
-import { from, of as observableOf } from 'rxjs';
+import { from, lastValueFrom, of as observableOf } from 'rxjs';
 
 describe('FileSystemEngineHost', () => {
   // We need to resolve a file that actually exists, and not just a folder.
@@ -245,12 +245,38 @@ describe('FileSystemEngineHost', () => {
     expect(() => engine.createCollection('invalid-aliases-2')).toThrow();
   });
 
-  it('does not list hidden schematics', () => {
+  it(`does not list hidden schematics when 'includeHidden' is not specified`, () => {
     const engineHost = new FileSystemEngineHost(root);
     const engine = new SchematicEngine(engineHost);
     const collection = engine.createCollection('hidden-schematics');
 
-    expect(collection.listSchematicNames()).toEqual(['schematic-1', 'schematic-2']);
+    expect(collection.listSchematicNames(/** includeHidden */)).toEqual([
+      'schematic-1',
+      'schematic-2',
+    ]);
+  });
+
+  it(`does not list hidden schematics when 'includeHidden' is false`, () => {
+    const engineHost = new FileSystemEngineHost(root);
+    const engine = new SchematicEngine(engineHost);
+    const collection = engine.createCollection('hidden-schematics');
+
+    expect(collection.listSchematicNames(false /** includeHidden */)).toEqual([
+      'schematic-1',
+      'schematic-2',
+    ]);
+  });
+
+  it(`does list hidden schematics when 'includeHidden' is true`, () => {
+    const engineHost = new FileSystemEngineHost(root);
+    const engine = new SchematicEngine(engineHost);
+    const collection = engine.createCollection('hidden-schematics');
+
+    expect(collection.listSchematicNames(true /** includeHidden */)).toEqual([
+      'hidden-schematic',
+      'schematic-1',
+      'schematic-2',
+    ]);
   });
 
   it('does not list private schematics', () => {
@@ -279,11 +305,9 @@ describe('FileSystemEngineHost', () => {
     const collection = engine.createCollection('extra-properties');
     const schematic = collection.createSchematic('schematic1');
 
-    schematic
-      .call({}, observableOf(new HostTree(host)))
-      .toPromise()
+    lastValueFrom(schematic.call({}, observableOf(new HostTree(host))))
       .then((tree) => {
-        return new HostSink(host).commit(tree).toPromise();
+        return lastValueFrom(new HostSink(host).commit(tree));
       })
       .then(() => {
         expect(host.files as string[]).toEqual(['/extra-schematic']);
@@ -305,12 +329,10 @@ describe('FileSystemEngineHost', () => {
 
     engineHost.createTaskExecutor('file-tasks/file-task.js').subscribe((executor) => {
       expect(executor).toBeTruthy();
-      from(executor(undefined, undefined as any))
-        .toPromise()
-        .then(
-          () => done.fail,
-          () => done(),
-        );
+      lastValueFrom(from(executor(undefined, undefined as any))).then(
+        () => done.fail,
+        () => done(),
+      );
     }, done.fail);
   });
 
@@ -322,10 +344,10 @@ describe('FileSystemEngineHost', () => {
     const collection = engine.createCollection('file-tasks');
     const schematic = collection.createSchematic('schematic-1');
 
-    schematic
-      .call({}, observableOf(new HostTree(host)))
-      .toPromise()
-      .then((tree) => new HostSink(host).commit(tree).toPromise())
+    lastValueFrom(schematic.call({}, observableOf(new HostTree(host))))
+      .then((tree) => {
+        return lastValueFrom(new HostSink(host).commit(tree));
+      })
       .then(() => engine.executePostTasks().toPromise())
       .then(() => done.fail())
       .catch((reason) => {

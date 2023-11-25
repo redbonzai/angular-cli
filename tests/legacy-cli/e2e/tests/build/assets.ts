@@ -10,15 +10,17 @@ export default async function () {
 
   await ng('build', '--configuration=development');
 
-  await expectFileToExist('dist/test-project/favicon.ico');
-  await expectFileToExist('dist/test-project/assets/.file');
-  await expectFileToMatch('dist/test-project/assets/test.abc', 'hello world');
-  await expectToFail(() => expectFileToExist('dist/test-project/assets/.gitkeep'));
+  await expectFileToExist('dist/test-project/browser/favicon.ico');
+  await expectFileToExist('dist/test-project/browser/assets/.file');
+  await expectFileToMatch('dist/test-project/browser/assets/test.abc', 'hello world');
+  await expectToFail(() => expectFileToExist('dist/test-project/browser/assets/.gitkeep'));
 
   // Ensure `followSymlinks` option follows symlinks
-  await updateJsonFile('angular.json', workspaceJson => {
+  await updateJsonFile('angular.json', (workspaceJson) => {
     const appArchitect = workspaceJson.projects['test-project'].architect;
-    appArchitect['build'].options.assets = [{ glob: '**/*', input: 'src/assets', output: 'assets', followSymlinks: true }];
+    appArchitect['build'].options.assets = [
+      { glob: '**/*', input: 'src/assets', output: 'assets', followSymlinks: true },
+    ];
   });
   fs.mkdirSync('dirToSymlink/subdir1', { recursive: true });
   fs.mkdirSync('dirToSymlink/subdir2/subsubdir1', { recursive: true });
@@ -30,8 +32,8 @@ export default async function () {
 
   await ng('build', '--configuration=development');
 
-  await expectFileToExist('dist/test-project/assets/symlinkDir/a.txt');
-  await expectFileToExist('dist/test-project/assets/symlinkDir/subdir1/b.txt');
-  await expectFileToExist('dist/test-project/assets/symlinkDir/subdir2/c.txt');
-  await expectFileToExist('dist/test-project/assets/symlinkDir/subdir2/subsubdir1/d.txt');
+  await expectFileToExist('dist/test-project/browser/assets/symlinkDir/a.txt');
+  await expectFileToExist('dist/test-project/browser/assets/symlinkDir/subdir1/b.txt');
+  await expectFileToExist('dist/test-project/browser/assets/symlinkDir/subdir2/c.txt');
+  await expectFileToExist('dist/test-project/browser/assets/symlinkDir/subdir2/subsubdir1/d.txt');
 }

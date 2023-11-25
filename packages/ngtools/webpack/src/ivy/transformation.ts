@@ -8,25 +8,37 @@
 
 import * as ts from 'typescript';
 import { elideImports } from '../transformers/elide_imports';
+import { findImageDomains } from '../transformers/find_image_domains';
 import { removeIvyJitSupportCalls } from '../transformers/remove-ivy-jit-support-calls';
 import { replaceResources } from '../transformers/replace_resources';
 
 export function createAotTransformers(
   builder: ts.BuilderProgram,
-  options: { emitClassMetadata?: boolean; emitNgModuleScope?: boolean },
+  options: {
+    emitClassMetadata?: boolean;
+    emitNgModuleScope?: boolean;
+    emitSetClassDebugInfo?: boolean;
+  },
+  imageDomains: Set<string>,
 ): ts.CustomTransformers {
   const getTypeChecker = () => builder.getProgram().getTypeChecker();
   const transformers: ts.CustomTransformers = {
-    before: [replaceBootstrap(getTypeChecker)],
+    before: [findImageDomains(imageDomains), replaceBootstrap(getTypeChecker)],
     after: [],
   };
 
   const removeClassMetadata = !options.emitClassMetadata;
   const removeNgModuleScope = !options.emitNgModuleScope;
-  if (removeClassMetadata || removeNgModuleScope) {
+  const removeSetClassDebugInfo = !options.emitSetClassDebugInfo;
+  if (removeClassMetadata || removeNgModuleScope || removeSetClassDebugInfo) {
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     transformers.before!.push(
-      removeIvyJitSupportCalls(removeClassMetadata, removeNgModuleScope, getTypeChecker),
+      removeIvyJitSupportCalls(
+        removeClassMetadata,
+        removeNgModuleScope,
+        removeSetClassDebugInfo,
+        getTypeChecker,
+      ),
     );
   }
 
@@ -37,7 +49,6 @@ export function createJitTransformers(
   builder: ts.BuilderProgram,
   compilerCli: typeof import('@angular/compiler-cli'),
   options: {
-    directTemplateLoading?: boolean;
     inlineStyleFileExtension?: string;
   },
 ): ts.CustomTransformers {
@@ -45,12 +56,7 @@ export function createJitTransformers(
 
   return {
     before: [
-      replaceResources(
-        () => true,
-        getTypeChecker,
-        options.directTemplateLoading,
-        options.inlineStyleFileExtension,
-      ),
+      replaceResources(() => true, getTypeChecker, options.inlineStyleFileExtension),
       compilerCli.constructorParametersDownlevelTransform(builder.getProgram()),
     ],
   };
@@ -80,6 +86,12 @@ export function mergeTransformers(
   return result;
 }
 
+/**
+ * The name of the Angular platform that should be replaced within
+ * bootstrap call expressions to support AOT.
+ */
+const PLATFORM_BROWSER_DYNAMIC_NAME = 'platformBrowserDynamic';
+
 export function replaceBootstrap(
   getTypeChecker: () => ts.TypeChecker,
 ): ts.TransformerFactory<ts.SourceFile> {
@@ -92,11 +104,10 @@ export function replaceBootstrap(
     const visitNode: ts.Visitor = (node: ts.Node) => {
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
         const target = node.expression;
-        if (target.text === 'platformBrowserDynamic') {
+        if (target.text === PLATFORM_BROWSER_DYNAMIC_NAME) {
           if (!bootstrapNamespace) {
             bootstrapNamespace = nodeFactory.createUniqueName('__NgCli_bootstrap_');
             bootstrapImport = nodeFactory.createImportDeclaration(
-              undefined,
               undefined,
               nodeFactory.createImportClause(
                 false,
@@ -121,6 +132,10 @@ export function replaceBootstrap(
     };
 
     return (sourceFile: ts.SourceFile) => {
+      if (!sourceFile.text.includes(PLATFORM_BROWSER_DYNAMIC_NAME)) {
+        return sourceFile;
+      }
+
       let updatedSourceFile = ts.visitEachChild(sourceFile, visitNode, context);
 
       if (bootstrapImport) {

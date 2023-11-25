@@ -1,14 +1,10 @@
 import express from 'express';
 import * as path from 'path';
 import { copyProjectAsset } from '../../utils/assets';
-import { appendToFile, replaceInFile } from '../../utils/fs';
+import { replaceInFile } from '../../utils/fs';
 import { ng } from '../../utils/process';
 
 export default async function () {
-  if (!process.env['E2E_BROWSERS']) {
-    return;
-  }
-
   // Ensure SauceLabs configuration
   if (!process.env['SAUCE_USERNAME'] || !process.env['SAUCE_ACCESS_KEY']) {
     throw new Error('SauceLabs is not configured.');
@@ -39,7 +35,7 @@ export default async function () {
 
   // Setup server
   const app = express();
-  app.use(express.static(path.resolve('dist/test-project')));
+  app.use(express.static(path.resolve('dist/test-project/browser')));
   const server = app.listen(2000, 'localhost');
 
   try {
@@ -47,8 +43,8 @@ export default async function () {
     await ng(
       'e2e',
       'test-project',
-      '--protractorConfig=e2e/protractor-saucelabs.conf.js',
-      '--devServerTarget=',
+      '--protractor-config=e2e/protractor-saucelabs.conf.js',
+      '--dev-server-target=',
     );
   } finally {
     server.close();

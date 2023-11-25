@@ -11,16 +11,18 @@ import {
   NodePath,
   ParseResult,
   parseSync,
+  template as templateBuilder,
   transformAsync,
   transformFromAstSync,
   traverse,
   types,
 } from '@babel/core';
-import templateBuilder from '@babel/template';
-import * as fs from 'fs';
+import * as fs from 'fs/promises';
 import * as path from 'path';
 import { workerData } from 'worker_threads';
+import { InlineOptions } from './bundle-inline-options';
 import { allowMinify, shouldBeautify } from './environment-options';
+import { assertIsError } from './error';
 import { I18nOptions } from './i18n-options';
 import { loadEsmModule } from './load-esm';
 
@@ -64,15 +66,14 @@ async function loadLocalizeTools(): Promise<LocalizeUtilityModule> {
   return loadEsmModule('@angular/localize/tools');
 }
 
-export async function createI18nPlugins(
+async function createI18nPlugins(
   locale: string,
   translation: unknown | undefined,
   missingTranslation: 'error' | 'warning' | 'ignore',
   shouldInline: boolean,
   localeDataContent?: string,
 ) {
-  const { Diagnostics, makeEs2015TranslatePlugin, makeEs5TranslatePlugin, makeLocalePlugin } =
-    await loadLocalizeTools();
+  const { Diagnostics, makeEs2015TranslatePlugin, makeLocalePlugin } = await loadLocalizeTools();
 
   const plugins = [];
   const diagnostics = new Diagnostics();
@@ -81,13 +82,6 @@ export async function createI18nPlugins(
     plugins.push(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       makeEs2015TranslatePlugin(diagnostics, (translation || {}) as any, {
-        missingTranslation: translation === undefined ? 'ignore' : missingTranslation,
-      }),
-    );
-
-    plugins.push(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      makeEs5TranslatePlugin(diagnostics, (translation || {}) as any, {
         missingTranslation: translation === undefined ? 'ignore' : missingTranslation,
       }),
     );
@@ -106,16 +100,6 @@ export async function createI18nPlugins(
   }
 
   return { diagnostics, plugins };
-}
-
-export interface InlineOptions {
-  filename: string;
-  code: string;
-  map?: string;
-  es5: boolean;
-  outputPath: string;
-  missingTranslation?: 'warning' | 'error' | 'ignore';
-  setLocale?: boolean;
 }
 
 interface LocalizePosition {
@@ -147,18 +131,18 @@ export async function inlineLocales(options: InlineOptions) {
     ast = parseSync(options.code, {
       babelrc: false,
       configFile: false,
-      sourceType: 'script',
+      sourceType: 'unambiguous',
       filename: options.filename,
     });
   } catch (error) {
-    if (error.message) {
-      // Make the error more readable.
-      // Same errors will contain the full content of the file as the error message
-      // Which makes it hard to find the actual error message.
-      const index = error.message.indexOf(')\n');
-      const msg = index !== -1 ? error.message.substr(0, index + 1) : error.message;
-      throw new Error(`${msg}\nAn error occurred inlining file "${options.filename}"`);
-    }
+    assertIsError(error);
+
+    // Make the error more readable.
+    // Same errors will contain the full content of the file as the error message
+    // Which makes it hard to find the actual error message.
+    const index = error.message.indexOf(')\n');
+    const msg = index !== -1 ? error.message.slice(0, index + 1) : error.message;
+    throw new Error(`${msg}\nAn error occurred inlining file "${options.filename}"`);
   }
 
   if (!ast) {
@@ -179,7 +163,7 @@ export async function inlineLocales(options: InlineOptions) {
       // If locale data is provided, load it and prepend to file
       const localeDataPath = i18n.locales[locale]?.dataPath;
       if (localeDataPath) {
-        localeDataContent = await loadLocaleData(localeDataPath, true, options.es5);
+        localeDataContent = await loadLocaleData(localeDataPath, true);
       }
     }
 
@@ -214,12 +198,12 @@ export async function inlineLocales(options: InlineOptions) {
       i18n.flatOutput ? '' : locale,
       options.filename,
     );
-    fs.writeFileSync(outputPath, transformResult.code);
+    await fs.writeFile(outputPath, transformResult.code);
 
     if (options.map && transformResult.map) {
       const outputMap = remapping([transformResult.map as SourceMapInput, options.map], () => null);
 
-      fs.writeFileSync(outputPath + '.map', JSON.stringify(outputMap));
+      await fs.writeFile(outputPath + '.map', JSON.stringify(outputMap));
     }
   }
 
@@ -280,13 +264,13 @@ async function inlineLocalesDirect(ast: ParseResult, options: InlineOptions) {
 
     let outputSource: import('webpack').sources.Source = content;
     if (options.setLocale) {
-      const setLocaleText = `var $localize=Object.assign(void 0===$localize?{}:$localize,{locale:"${locale}"});\n`;
+      const setLocaleText = `globalThis.$localize=Object.assign(globalThis.$localize || {},{locale:"${locale}"});\n`;
 
       // If locale data is provided, load it and prepend to file
       let localeDataSource;
       const localeDataPath = i18n.locales[locale] && i18n.locales[locale].dataPath;
       if (localeDataPath) {
-        const localeDataContent = await loadLocaleData(localeDataPath, true, options.es5);
+        const localeDataContent = await loadLocaleData(localeDataPath, true);
         localeDataSource = new OriginalSource(localeDataContent, path.basename(localeDataPath));
       }
 
@@ -305,21 +289,21 @@ async function inlineLocalesDirect(ast: ParseResult, options: InlineOptions) {
       i18n.flatOutput ? '' : locale,
       options.filename,
     );
-    fs.writeFileSync(outputPath, outputCode);
+    await fs.writeFile(outputPath, outputCode);
 
     if (inputMap && outputMap) {
       outputMap.file = options.filename;
       if (mapSourceRoot) {
         outputMap.sourceRoot = mapSourceRoot;
       }
-      fs.writeFileSync(outputPath + '.map', JSON.stringify(outputMap));
+      await fs.writeFile(outputPath + '.map', JSON.stringify(outputMap));
     }
   }
 
   return { file: options.filename, diagnostics: diagnostics.messages, count: positions.length };
 }
 
-function inlineCopyOnly(options: InlineOptions) {
+async function inlineCopyOnly(options: InlineOptions) {
   if (!i18n) {
     throw new Error('i18n options are missing');
   }
@@ -330,9 +314,9 @@ function inlineCopyOnly(options: InlineOptions) {
       i18n.flatOutput ? '' : locale,
       options.filename,
     );
-    fs.writeFileSync(outputPath, options.code);
+    await fs.writeFile(outputPath, options.code);
     if (options.map) {
-      fs.writeFileSync(outputPath + '.map', options.map);
+      await fs.writeFile(outputPath + '.map', options.map);
     }
   }
 
@@ -350,44 +334,21 @@ function findLocalizePositions(
   const { File } = require('@babel/core');
   const file = new File({}, { code: options.code, ast });
 
-  if (options.es5) {
-    traverse(file.ast, {
-      CallExpression(path) {
-        const callee = path.get('callee');
-        if (
-          callee.isIdentifier() &&
-          callee.node.name === localizeName &&
-          utils.isGlobalIdentifier(callee)
-        ) {
-          const [messageParts, expressions] = unwrapLocalizeCall(path, utils);
-          positions.push({
-            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-            start: path.node.start!,
-            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-            end: path.node.end!,
-            messageParts,
-            expressions,
-          });
-        }
-      },
-    });
-  } else {
-    traverse(file.ast, {
-      TaggedTemplateExpression(path) {
-        if (types.isIdentifier(path.node.tag) && path.node.tag.name === localizeName) {
-          const [messageParts, expressions] = unwrapTemplateLiteral(path, utils);
-          positions.push({
-            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-            start: path.node.start!,
-            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-            end: path.node.end!,
-            messageParts,
-            expressions,
-          });
-        }
-      },
-    });
-  }
+  traverse(file.ast, {
+    TaggedTemplateExpression(path) {
+      if (types.isIdentifier(path.node.tag) && path.node.tag.name === localizeName) {
+        const [messageParts, expressions] = unwrapTemplateLiteral(path, utils);
+        positions.push({
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          start: path.node.start!,
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          end: path.node.end!,
+          messageParts,
+          expressions,
+        });
+      }
+    },
+  });
 
   return positions;
 }
@@ -414,9 +375,9 @@ function unwrapLocalizeCall(
   return [messageParts, expressions];
 }
 
-async function loadLocaleData(path: string, optimize: boolean, es5: boolean): Promise<string> {
+async function loadLocaleData(path: string, optimize: boolean): Promise<string> {
   // The path is validated during option processing before the build starts
-  const content = fs.readFileSync(path, 'utf8');
+  const content = await fs.readFile(path, 'utf8');
 
   // Downlevel and optimize the data
   const transformResult = await transformAsync(content, {
@@ -431,8 +392,7 @@ async function loadLocaleData(path: string, optimize: boolean, es5: boolean): Pr
         require.resolve('@babel/preset-env'),
         {
           bugfixes: true,
-          // IE 11 is the oldest supported browser
-          targets: es5 ? { ie: '11' } : { esmodules: true },
+          targets: { esmodules: true },
         },
       ],
     ],

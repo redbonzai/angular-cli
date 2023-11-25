@@ -6,8 +6,7 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { Observable, concat } from 'rxjs';
-import { map, mapTo, toArray } from 'rxjs/operators';
+import { Observable, concat, map, mapTo, toArray } from 'rxjs';
 import { FileOperator, Rule, Source } from '../engine/interface';
 import { SchematicsException } from '../exception/exception';
 import { FilterHostTree, HostTree } from '../tree/host-tree';
@@ -33,9 +32,14 @@ export function empty(): Source {
 /**
  * Chain multiple rules into a single rule.
  */
-export function chain(rules: Rule[]): Rule {
-  return (tree, context) => {
-    return rules.reduce<Tree | Observable<Tree>>((acc, curr) => callRule(curr, acc, context), tree);
+export function chain(rules: Iterable<Rule> | AsyncIterable<Rule>): Rule {
+  return async (initialTree, context) => {
+    let intermediateTree: Observable<Tree> | undefined;
+    for await (const rule of rules) {
+      intermediateTree = callRule(rule, intermediateTree ?? initialTree, context);
+    }
+
+    return () => intermediateTree;
   };
 }
 

@@ -6,18 +6,20 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { logging } from '@angular-devkit/core';
 import type { ParsedConfiguration } from '@angular/compiler-cli';
+import { logging } from '@angular-devkit/core';
 import {
   AssetPatternClass,
   Budget,
   CrossOrigin,
-  ExtraEntryPoint,
-  I18NMissingTranslation,
+  I18NTranslation,
   IndexUnion,
   InlineStyleLanguage,
   Localize,
+  OutputHashing,
+  ScriptElement,
   SourceMapClass,
+  StyleElement,
 } from '../builders/browser/schema';
 import { Schema as DevServerSchema } from '../builders/dev-server/schema';
 import { NormalizedCachedOptions } from './normalize-cache';
@@ -38,17 +40,15 @@ export interface BuildOptions {
   verbose?: boolean;
   progress?: boolean;
   localize?: Localize;
-  i18nMissingTranslation?: I18NMissingTranslation;
-  bundleDependencies?: boolean;
+  i18nMissingTranslation?: I18NTranslation;
   externalDependencies?: string[];
   watch?: boolean;
-  outputHashing?: string;
+  outputHashing?: OutputHashing;
   poll?: number;
   index?: IndexUnion;
   deleteOutputPath?: boolean;
   preserveSymlinks?: boolean;
   extractLicenses?: boolean;
-  showCircularDependencies?: boolean;
   buildOptimizer?: boolean;
   namedChunks?: boolean;
   crossOrigin?: CrossOrigin;
@@ -58,11 +58,11 @@ export interface BuildOptions {
   statsJson: boolean;
   hmr?: boolean;
   main: string;
-  polyfills?: string;
+  polyfills: string[];
   budgets: Budget[];
   assets: AssetPatternClass[];
-  scripts: ExtraEntryPoint[];
-  styles: ExtraEntryPoint[];
+  scripts: ScriptElement[];
+  styles: StyleElement[];
   stylePreprocessorOptions?: { includePaths: string[] };
   platform?: 'browser' | 'server';
   fileReplacements: NormalizedFileReplacement[];
@@ -71,12 +71,12 @@ export interface BuildOptions {
   cache: NormalizedCachedOptions;
   codeCoverage?: boolean;
   codeCoverageExclude?: string[];
-  supportedBrowsers: string[];
+  supportedBrowsers?: string[];
 }
 
 export interface WebpackDevServerOptions
   extends BuildOptions,
-    Omit<DevServerSchema, 'optimization' | 'sourceMap' | 'browserTarget'> {}
+    Omit<DevServerSchema, 'optimization' | 'sourceMap' | 'buildTarget' | 'browserTarget'> {}
 
 export interface WebpackConfigOptions<T = BuildOptions> {
   root: string;
@@ -86,6 +86,5 @@ export interface WebpackConfigOptions<T = BuildOptions> {
   buildOptions: T;
   tsConfig: ParsedConfiguration;
   tsConfigPath: string;
-  scriptTarget: import('typescript').ScriptTarget;
   projectName: string;
 }

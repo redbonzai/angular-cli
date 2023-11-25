@@ -4,16 +4,11 @@
 # found in the LICENSE file at https://angular.io/license
 
 load("@npm//@bazel/jasmine:index.bzl", "jasmine_node_test")
-load("//tools:defaults.bzl", "ts_library")
+load("//tools:defaults.bzl", "pkg_npm", "ts_library")
 load("//tools:ts_json_schema.bzl", "ts_json_schema")
+load("@npm//@angular/build-tooling/bazel/api-golden:index.bzl", "api_golden_test_npm_package")
 
-# @external_begin
-load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
-load("@build_bazel_rules_nodejs//:index.bzl", "pkg_npm")
-load("@npm//@angular/dev-infra-private/bazel/api-golden:index.bzl", "api_golden_test_npm_package")
-# @external_end
-
-licenses(["notice"])  # MIT
+licenses(["notice"])
 
 package(default_visibility = ["//visibility:public"])
 
@@ -37,8 +32,8 @@ ts_library(
             "src/**/*_spec.ts",
         ],
     ) + [
-        "//packages/angular_devkit/build_webpack:src/webpack/schema.ts",
         "//packages/angular_devkit/build_webpack:src/webpack-dev-server/schema.ts",
+        "//packages/angular_devkit/build_webpack:src/webpack/schema.ts",
     ],
     data = [
         "builders.json",
@@ -51,7 +46,6 @@ ts_library(
     deps = [
         "//packages/angular_devkit/architect",
         "@npm//@types/node",
-        "@npm//@types/webpack-dev-server",
         "@npm//rxjs",
         "@npm//webpack",
         "@npm//webpack-dev-server",
@@ -86,8 +80,6 @@ ts_library(
         "@npm//@angular/core",
         "@npm//@angular/platform-browser",
         "@npm//@angular/platform-browser-dynamic",
-        "@npm//@types/node-fetch",
-        "@npm//node-fetch",
         "@npm//tslib",
         "@npm//zone.js",
     ],
@@ -105,20 +97,25 @@ jasmine_node_test(
     ],
 )
 
-# @external_begin
-pkg_npm(
-    name = "npm_package",
-    deps = [
-        ":build_webpack",
-    ],
+genrule(
+    name = "license",
+    srcs = ["//:LICENSE"],
+    outs = ["LICENSE"],
+    cmd = "cp $(execpath //:LICENSE) $@",
 )
 
-pkg_tar(
-    name = "npm_package_archive",
-    srcs = [":npm_package"],
-    extension = "tar.gz",
-    strip_prefix = "./npm_package",
-    tags = ["manual"],
+pkg_npm(
+    name = "npm_package",
+    pkg_deps = [
+        "//packages/angular_devkit/architect:package.json",
+    ],
+    tags = ["release-package"],
+    deps = [
+        ":README.md",
+        ":build_webpack",
+        ":builders.json",
+        ":license",
+    ],
 )
 
 api_golden_test_npm_package(
@@ -130,4 +127,3 @@ api_golden_test_npm_package(
     golden_dir = "angular_cli/goldens/public-api/angular_devkit/build_webpack",
     npm_package = "angular_cli/packages/angular_devkit/build_webpack/npm_package",
 )
-# @external_end

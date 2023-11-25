@@ -66,10 +66,6 @@ export const allowMangle = isPresent(mangleVariable)
 export const shouldBeautify = debugOptimize.beautify;
 export const allowMinify = debugOptimize.minify;
 
-// Build profiling
-const profilingVariable = process.env['NG_BUILD_PROFILING'];
-export const profilingEnabled = isPresent(profilingVariable) && isEnabled(profilingVariable);
-
 /**
  * Some environments, like CircleCI which use Docker report a number of CPUs by the host and not the count of available.
  * This cause `Error: Call retries were exceeded` errors when trying to use them.
@@ -82,20 +78,27 @@ export const profilingEnabled = isPresent(profilingVariable) && isEnabled(profil
 const maxWorkersVariable = process.env['NG_BUILD_MAX_WORKERS'];
 export const maxWorkers = isPresent(maxWorkersVariable) ? +maxWorkersVariable : 4;
 
-// Build cache
-const cacheVariable = process.env['NG_BUILD_CACHE'];
-export const cachingDisabled = (() => {
-  if (!isPresent(cacheVariable)) {
-    return null;
+const parallelTsVariable = process.env['NG_BUILD_PARALLEL_TS'];
+export const useParallelTs = !isPresent(parallelTsVariable) || !isDisabled(parallelTsVariable);
+
+const legacySassVariable = process.env['NG_BUILD_LEGACY_SASS'];
+export const useLegacySass: boolean = (() => {
+  if (!isPresent(legacySassVariable)) {
+    return false;
   }
 
   // eslint-disable-next-line no-console
   console.warn(
     colors.yellow(
-      `Warning: 'NG_BUILD_CACHE' environment variable support will be removed in version 14.\n` +
-        `Configure 'cli.cache' in the workspace configuration instead.`,
+      `Warning: 'NG_BUILD_LEGACY_SASS' environment variable support will be removed in version 16.`,
     ),
   );
 
-  return isDisabled(cacheVariable);
+  return isEnabled(legacySassVariable);
 })();
+
+const debugPerfVariable = process.env['NG_BUILD_DEBUG_PERF'];
+export const debugPerformance = isPresent(debugPerfVariable) && isEnabled(debugPerfVariable);
+
+const watchRootVariable = process.env['NG_BUILD_WATCH_ROOT'];
+export const shouldWatchRoot = isPresent(watchRootVariable) && isEnabled(watchRootVariable);

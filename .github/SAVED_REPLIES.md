@@ -29,7 +29,7 @@ Thanks for reporting this issue. However, this issue is a duplicate of #<ISSUE_N
 ## Angular CLI: Insufficient Information Provided (v1)
 
 ```
-Thanks for reporting this issue. However, you didn't provide sufficient information for us to understand and reproduce the problem. Please check out [our submission guidelines](https://github.com/angular/angular-cli/blob/master/CONTRIBUTING.md#-submitting-an-issue) to understand why we can't act on issues that are lacking important information.
+Thanks for reporting this issue. However, you didn't provide sufficient information for us to understand and reproduce the problem. Please check out [our submission guidelines](https://github.com/angular/angular-cli/blob/main/CONTRIBUTING.md#-submitting-an-issue) to understand why we can't act on issues that are lacking important information.
 
 If the problem persists, please file a new issue and ensure you provide all of the required information when filling out the issue template.
 ```
@@ -55,7 +55,7 @@ I'm sorry, but we can't reproduce the problem following the instructions you pro
 Remember that we have a large number of issues to resolve, and have only a limited amount of time to reproduce your issue.
 Short, explicit instructions make it much more likely we'll be able to reproduce the problem so we can fix it.
 
-If the problem persists, please open a new issue following [our submission guidelines](https://github.com/angular/angular-cli/blob/master/CONTRIBUTING.md#-submitting-an-issue).
+If the problem persists, please open a new issue following [our submission guidelines](https://github.com/angular/angular-cli/blob/main/CONTRIBUTING.md#-submitting-an-issue).
 
 A good way to make a minimal repro is to create a new app via `ng new repro-app` and adding the minimum possible code to show the problem. Then you can push this repository to github and link it here.
 ```
@@ -71,9 +71,9 @@ If the problem persists after upgrading, please open a new issue, provide a simp
 ## Angular CLI: Support Request (v1)
 
 ```
-Hello, we reviewed this issue and determined that it doesn't fall into the bug report or feature request category. This issue tracker is not suitable for support requests, please repost your issue on [StackOverflow](http://stackoverflow.com/) using tag `angular-cli`.
+Hello, we reviewed this issue and determined that it doesn't fall into the bug report or feature request category. This issue tracker is not suitable for support requests, please repost your issue on [StackOverflow](https://stackoverflow.com/) using tag `angular-cli`.
 
-If you are wondering why we don't resolve support issues via the issue tracker, please [check out this explanation](https://github.com/angular/angular-cli/blob/master/CONTRIBUTING.md#-got-a-question-or-problem).
+If you are wondering why we don't resolve support issues via the issue tracker, please [check out this explanation](https://github.com/angular/angular-cli/blob/main/CONTRIBUTING.md#-got-a-question-or-problem).
 ```
 
 ## Angular CLI: Static Analysis errors (v1)
@@ -84,7 +84,7 @@ Hello, errors like `Error encountered resolving symbol values statically` mean t
 Angular CLI always runs *some* static analysis, even in JIT mode, in order to discover lazy-loaded routes.
 This may cause a lot of static analysis errors to surface when importing your project into the CLI, or upgrading for older versions where we didn't run this kind of analysis.
 
-Below are good resources on how to to debug these errors:
+Below are good resources on how to debug these errors:
 - https://gist.github.com/chuckjaz/65dcc2fd5f4f5463e492ed0cb93bca60
 - https://github.com/rangle/angular-2-aot-sandbox#aot-dos-and-donts
 

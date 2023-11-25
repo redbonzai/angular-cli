@@ -6,24 +6,41 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { join, normalize, strings } from '@angular-devkit/core';
 import {
   Rule,
   SchematicsException,
-  Tree,
   apply,
   applyTemplates,
   chain,
   mergeWith,
   move,
+  strings,
   url,
 } from '@angular-devkit/schematics';
-import { NodeDependencyType, addPackageJsonDependency } from '../utility/dependencies';
+import {
+  AngularBuilder,
+  DependencyType,
+  ExistingBehavior,
+  addDependency,
+  addRootProvider,
+  updateWorkspace,
+} from '@schematics/angular/utility';
+import { posix as path } from 'path';
 import { JSONFile } from '../utility/json-file';
-import { relativePathToWorkspaceRoot } from '../utility/paths';
-import { getWorkspace, updateWorkspace } from '../utility/workspace';
-import { Builders } from '../utility/workspace-models';
+import { latestVersions } from '../utility/latest-versions';
 import { Schema as E2eOptions } from './schema';
+
+/**
+ * The list of development dependencies used by the E2E protractor-based builder.
+ * The versions are sourced from the latest versions `../utility/latest-versions/package.json`
+ * file which is automatically updated via renovate.
+ */
+const E2E_DEV_DEPENDENCIES = Object.freeze([
+  'protractor',
+  'jasmine-spec-reporter',
+  'ts-node',
+  '@types/node',
+]);
 
 function addScriptsToPackageJson(): Rule {
   return (host) => {
@@ -37,64 +54,57 @@ function addScriptsToPackageJson(): Rule {
 }
 
 export default function (options: E2eOptions): Rule {
-  return async (host: Tree) => {
-    const appProject = options.relatedAppName;
-    const workspace = await getWorkspace(host);
-    const project = workspace.projects.get(appProject);
+  const { relatedAppName } = options;
+
+  return updateWorkspace((workspace) => {
+    const project = workspace.projects.get(relatedAppName);
+
     if (!project) {
-      throw new SchematicsException(`Project name "${appProject}" doesn't not exist.`);
+      throw new SchematicsException(`Project name "${relatedAppName}" doesn't not exist.`);
     }
 
-    const root = join(normalize(project.root), 'e2e');
+    const e2eRootPath = path.join(project.root, 'e2e');
 
     project.targets.add({
       name: 'e2e',
-      builder: Builders.Protractor,
+      builder: AngularBuilder.Protractor,
       defaultConfiguration: 'development',
       options: {
-        protractorConfig: `${root}/protractor.conf.js`,
+        protractorConfig: path.join(e2eRootPath, 'protractor.conf.js'),
       },
       configurations: {
         production: {
-          devServerTarget: `${options.relatedAppName}:serve:production`,
+          devServerTarget: `${relatedAppName}:serve:production`,
         },
         development: {
-          devServerTarget: `${options.relatedAppName}:serve:development`,
+          devServerTarget: `${relatedAppName}:serve:development`,
         },
       },
     });
 
     return chain([
-      updateWorkspace(workspace),
       mergeWith(
         apply(url('./files'), [
           applyTemplates({
             utils: strings,
             ...options,
-            relativePathToWorkspaceRoot: relativePathToWorkspaceRoot(root),
+            relativePathToWorkspaceRoot: path.relative(path.join('/', e2eRootPath), '/'),
           }),
-          move(root),
+          move(e2eRootPath),
         ]),
       ),
-      (host) =>
-        [
-          {
-            type: NodeDependencyType.Dev,
-            name: 'protractor',
-            version: '~7.0.0',
-          },
-          {
-            type: NodeDependencyType.Dev,
-            name: 'jasmine-spec-reporter',
-            version: '~7.0.0',
-          },
-          {
-            type: NodeDependencyType.Dev,
-            name: 'ts-node',
-            version: '~9.1.1',
-          },
-        ].forEach((dep) => addPackageJsonDependency(host, dep)),
+      addRootProvider(
+        relatedAppName,
+        ({ code, external }) =>
+          code`${external('provideProtractorTestingSupport', '@angular/platform-browser')}()`,
+      ),
+      ...E2E_DEV_DEPENDENCIES.map((name) =>
+        addDependency(name, latestVersions[name], {
+          type: DependencyType.Dev,
+          existing: ExistingBehavior.Skip,
+        }),
+      ),
       addScriptsToPackageJson(),
     ]);
-  };
+  });
 }

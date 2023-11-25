@@ -18,7 +18,9 @@ import {
   addRouteDeclarationToModule,
   addSymbolToNgModuleMetadata,
   findNodes,
+  hasTopLevelIdentifier,
   insertAfterLastOccurrence,
+  insertImport,
 } from './ast-utils';
 
 function getTsSource(path: string, content: string): ts.SourceFile {
@@ -260,7 +262,7 @@ describe('ast utils', () => {
       const elements = (arrayNode.pop() as ts.ArrayLiteralExpression).elements;
 
       const change = insertAfterLastOccurrence(
-        (elements as unknown) as ts.Node[],
+        elements as unknown as ts.Node[],
         `, 'bar'`,
         filePath,
         elements.pos,
@@ -281,7 +283,7 @@ describe('ast utils', () => {
       const elements = (arrayNode.pop() as ts.ArrayLiteralExpression).elements;
 
       const change = insertAfterLastOccurrence(
-        (elements as unknown) as ts.Node[],
+        elements as unknown as ts.Node[],
         `'bar'`,
         filePath,
         elements.pos,
@@ -312,7 +314,7 @@ describe('ast utils', () => {
 
       const source = getTsSource(modulePath, moduleContent);
       const change = () => addRouteDeclarationToModule(source, './src/app', '');
-      expect(change).toThrowError(`Couldn't find a route declaration in ./src/app.`);
+      expect(change).toThrowError(/Couldn't find a route declaration in \.\/src\/app/);
     });
 
     it(`should throw an error when router module doesn't have arguments`, () => {
@@ -502,7 +504,7 @@ describe('ast utils', () => {
         import { AppComponent } from './app.component';
 
         const routes = [
-          { path: 'foo', component: FooComponent, canLoad: [Guard] }
+          { path: 'foo', component: FooComponent, canMatch: [Guard] }
         ];
 
         @NgModule({
@@ -527,7 +529,7 @@ describe('ast utils', () => {
       const output = applyChanges(modulePath, moduleContent, [changes]);
       /* eslint-disable max-len */
       expect(output).toMatch(
-        /const routes = \[\r?\n?\s*{ path: 'foo', component: FooComponent, canLoad: \[Guard\] },\r?\n?\s*{ path: 'bar', component: BarComponent }\r?\n?\s*\]/,
+        /const routes = \[\r?\n?\s*{ path: 'foo', component: FooComponent, canMatch: \[Guard\] },\r?\n?\s*{ path: 'bar', component: BarComponent }\r?\n?\s*\]/,
       );
       /* eslint-enable max-len */
     });
@@ -632,6 +634,17 @@ describe('ast utils', () => {
         /RouterModule\.forRoot\(\[\r?\n?\s*{ path: 'foo', component: FooComponent },\r?\n?\s*{ path: 'bar', component: BarComponent }\r?\n?\s*\]\)/,
       );
     });
+
+    it('should error if sourcefile is empty', () => {
+      const change = () =>
+        addRouteDeclarationToModule(
+          getTsSource(modulePath, ''),
+          './src/app',
+          `{ path: 'foo', component: FooComponent }`,
+        );
+
+      expect(change).toThrowError(/Couldn't find a route declaration in \.\/src\/app/);
+    });
   });
 
   describe('findNodes', () => {
@@ -672,6 +685,166 @@ describe('ast utils', () => {
 
         expect(paNodes.length).toEqual(4);
       });
+    });
+  });
+
+  describe('insertImport', () => {
+    const filePath = './src/foo.ts';
+
+    it('should insert a new import into a file', () => {
+      const fileContent = '';
+      const source = getTsSource(filePath, fileContent);
+      const change = insertImport(source, filePath, 'Component', '@angular/core');
+      const result = applyChanges(filePath, fileContent, [change]).trim();
+
+      expect(result).toBe(`import { Component } from '@angular/core';`);
+    });
+
+    it('should insert a new import under an alias into a file', () => {
+      const fileContent = '';
+      const source = getTsSource(filePath, fileContent);
+      const change = insertImport(
+        source,
+        filePath,
+        'Component',
+        '@angular/core',
+        false,
+        'NgComponent',
+      );
+      const result = applyChanges(filePath, fileContent, [change]).trim();
+
+      expect(result).toBe(`import { Component as NgComponent } from '@angular/core';`);
+    });
+
+    it('should reuse imports from the same module without an alias', () => {
+      const fileContent = `import { Pipe } from '@angular/core';`;
+      const source = getTsSource(filePath, fileContent);
+      const change = insertImport(source, filePath, 'Component', '@angular/core');
+      const result = applyChanges(filePath, fileContent, [change]).trim();
+
+      expect(result).toBe(`import { Pipe, Component } from '@angular/core';`);
+    });
+
+    it('should reuse imports from the same module with an alias', () => {
+      const fileContent = `import { Pipe } from '@angular/core';`;
+      const source = getTsSource(filePath, fileContent);
+      const change = insertImport(
+        source,
+        filePath,
+        'Component',
+        '@angular/core',
+        false,
+        'NgComponent',
+      );
+      const result = applyChanges(filePath, fileContent, [change]).trim();
+
+      expect(result).toBe(`import { Pipe, Component as NgComponent } from '@angular/core';`);
+    });
+
+    it('should reuse imports for the same symbol', () => {
+      const fileContent = `import { Component } from '@angular/core';`;
+      const source = getTsSource(filePath, fileContent);
+      const change = insertImport(source, filePath, 'Component', '@angular/core');
+      const result = applyChanges(filePath, fileContent, [change]).trim();
+
+      expect(result).toBe(fileContent);
+    });
+
+    it('should not insert a new import if the symbol is imported under an alias', () => {
+      const fileContent = `import { Component as NgComponent } from '@angular/core';`;
+      const source = getTsSource(filePath, fileContent);
+      const change = insertImport(source, filePath, 'Component', '@angular/core');
+      const result = applyChanges(filePath, fileContent, [change]).trim();
+
+      expect(result).toBe(fileContent);
+    });
+
+    it('should insert a new default import into a file', () => {
+      const fileContent = '';
+      const source = getTsSource(filePath, fileContent);
+      const change = insertImport(source, filePath, 'core', '@angular/core', true);
+      const result = applyChanges(filePath, fileContent, [change]).trim();
+
+      expect(result).toBe(`import core from '@angular/core';`);
+    });
+
+    it('should not insert an import if there is a namespace import', () => {
+      const fileContent = `import * as foo from '@angular/core';`;
+      const source = getTsSource(filePath, fileContent);
+      const change = insertImport(source, filePath, 'Component', '@angular/core');
+      const result = applyChanges(filePath, fileContent, [change]).trim();
+
+      expect(result).toBe(fileContent);
+    });
+  });
+
+  describe('hasTopLevelIdentifier', () => {
+    const filePath = './src/foo.ts';
+
+    it('should find top-level class declaration with a specific name', () => {
+      const fileContent = `class FooClass {}`;
+      const source = getTsSource(filePath, fileContent);
+
+      expect(hasTopLevelIdentifier(source, 'FooClass')).toBe(true);
+      expect(hasTopLevelIdentifier(source, 'Foo')).toBe(false);
+    });
+
+    it('should find top-level interface declaration with a specific name', () => {
+      const fileContent = `interface FooInterface {}`;
+      const source = getTsSource(filePath, fileContent);
+
+      expect(hasTopLevelIdentifier(source, 'FooInterface')).toBe(true);
+      expect(hasTopLevelIdentifier(source, 'Foo')).toBe(false);
+    });
+
+    it('should find top-level variable declaration with a specific name', () => {
+      const fileContent = `
+        const singleVar = 1;
+
+        const fooVar = 1, barVar = 2;
+      `;
+      const source = getTsSource(filePath, fileContent);
+
+      expect(hasTopLevelIdentifier(source, 'singleVar')).toBe(true);
+      expect(hasTopLevelIdentifier(source, 'fooVar')).toBe(true);
+      expect(hasTopLevelIdentifier(source, 'barVar')).toBe(true);
+      expect(hasTopLevelIdentifier(source, 'bar')).toBe(false);
+    });
+
+    it('should find top-level imports with a specific name', () => {
+      const fileContent = `
+        import { FooInterface } from '@foo/interfaces';
+
+        class FooClass implements FooInterface {}
+      `;
+      const source = getTsSource(filePath, fileContent);
+
+      expect(hasTopLevelIdentifier(source, 'FooInterface')).toBe(true);
+      expect(hasTopLevelIdentifier(source, 'Foo')).toBe(false);
+    });
+
+    it('should find top-level aliased imports with a specific name', () => {
+      const fileContent = `
+        import { FooInterface as AliasedFooInterface } from '@foo/interfaces';
+
+        class FooClass implements AliasedFooInterface {}
+      `;
+      const source = getTsSource(filePath, fileContent);
+
+      expect(hasTopLevelIdentifier(source, 'AliasedFooInterface')).toBe(true);
+      expect(hasTopLevelIdentifier(source, 'FooInterface')).toBe(false);
+      expect(hasTopLevelIdentifier(source, 'Foo')).toBe(false);
+    });
+
+    it('should be able to skip imports from a certain module', () => {
+      const fileContent = `
+        import { FooInterface } from '@foo/interfaces';
+
+        class FooClass implements FooInterface {}
+      `;
+      const source = getTsSource(filePath, fileContent);
+
+      expect(hasTopLevelIdentifier(source, 'FooInterface', '@foo/interfaces')).toBe(false);
     });
   });
 });

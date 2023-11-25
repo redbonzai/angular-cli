@@ -6,16 +6,15 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import * as cacache from 'cacache';
-import * as fs from 'fs';
-import * as https from 'https';
-import proxyAgent from 'https-proxy-agent';
-import { join } from 'path';
-import { URL } from 'url';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { createHash } from 'node:crypto';
+import { readFile, rm, writeFile } from 'node:fs/promises';
+import * as https from 'node:https';
+import { join } from 'node:path';
+import { URL } from 'node:url';
 import { NormalizedCachedOptions } from '../normalize-cache';
+import { VERSION } from '../package-version';
 import { htmlRewritingStream } from './html-rewriting-stream';
-
-const packageVersion = require('../../../package.json').version;
 
 interface FontProviderDetails {
   preconnectUrl: string;
@@ -35,6 +34,16 @@ const SUPPORTED_PROVIDERS: Record<string, FontProviderDetails> = {
   },
 };
 
+/**
+ * Hash algorithm used for cached files.
+ */
+const CONTENT_HASH_ALGORITHM = 'sha256';
+
+/**
+ * String length of the SHA-256 content hash stored in cached files.
+ */
+const CONTENT_HASH_LENGTH = 64;
+
 export class InlineFontsProcessor {
   private readonly cachePath: string | undefined;
   constructor(private options: InlineFontsOptions) {
@@ -49,7 +58,8 @@ export class InlineFontsProcessor {
     const existingPreconnect = new Set<string>();
 
     // Collector link tags with href
-    const { rewriter: collectorStream } = await htmlRewritingStream(content);
+    const { rewriter: collectorStream, transformedContent: initCollectorStream } =
+      await htmlRewritingStream(content);
 
     collectorStream.on('startTag', (tag) => {
       const { tagName, attrs } = tag;
@@ -87,6 +97,11 @@ export class InlineFontsProcessor {
           return;
         }
       }
+    });
+
+    initCollectorStream().catch(() => {
+      // We don't really care about any errors here because it just initializes
+      // the rewriting stream, as we are waiting for `finish` below.
     });
 
     await new Promise((resolve) => collectorStream.on('finish', resolve));
@@ -152,24 +167,40 @@ export class InlineFontsProcessor {
       }
     });
 
-    return transformedContent;
+    return transformedContent();
   }
 
   private async getResponse(url: URL): Promise<string> {
-    const key = `${packageVersion}|${url}`;
-
+    let cacheFile;
     if (this.cachePath) {
-      const entry = await cacache.get.info(this.cachePath, key);
-      if (entry) {
-        return fs.promises.readFile(entry.path, 'utf8');
-      }
+      const key = createHash(CONTENT_HASH_ALGORITHM).update(`${VERSION}|${url}`).digest('hex');
+      cacheFile = join(this.cachePath, key);
     }
 
-    let agent: proxyAgent.HttpsProxyAgent | undefined;
+    if (cacheFile) {
+      try {
+        const data = await readFile(cacheFile, 'utf8');
+        // Check for valid content via stored hash
+        if (data.length > CONTENT_HASH_LENGTH) {
+          const storedHash = data.slice(0, CONTENT_HASH_LENGTH);
+          const content = data.slice(CONTENT_HASH_LENGTH);
+          const contentHash = createHash(CONTENT_HASH_ALGORITHM).update(content).digest('base64');
+          if (storedHash === contentHash) {
+            // Return valid content
+            return content;
+          } else {
+            // Delete corrupted cache content
+            await rm(cacheFile);
+          }
+        }
+      } catch {}
+    }
+
+    let agent: HttpsProxyAgent<string> | undefined;
     const httpsProxy = process.env.HTTPS_PROXY ?? process.env.https_proxy;
 
     if (httpsProxy) {
-      agent = proxyAgent(httpsProxy);
+      agent = new HttpsProxyAgent(httpsProxy);
     }
 
     const data = await new Promise<string>((resolve, reject) => {
@@ -179,7 +210,6 @@ export class InlineFontsProcessor {
           url,
           {
             agent,
-            rejectUnauthorized: false,
             headers: {
               'user-agent':
                 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.121 Safari/537.36',
@@ -209,8 +239,11 @@ export class InlineFontsProcessor {
         );
     });
 
-    if (this.cachePath) {
-      await cacache.put(this.cachePath, key, data);
+    if (cacheFile) {
+      try {
+        const dataHash = createHash(CONTENT_HASH_ALGORITHM).update(data).digest('hex');
+        await writeFile(cacheFile, dataHash + data);
+      } catch {}
     }
 
     return data;
